@@ -60,11 +60,10 @@ cleanup() {
     rm -rf offload
     
     echo -e "${GREEN}Cleanup complete${NC}"
-    exit 0
 }
 
 # Register cleanup for script termination
-trap cleanup SIGINT SIGTERM
+trap 'cleanup; exit 0' SIGINT SIGTERM
 
 # Initial cleanup
 echo -e "${BLUE}Performing initial cleanup...${NC}"
