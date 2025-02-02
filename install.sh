@@ -8,9 +8,9 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-VENV_NAME="${VENV_NAME:-locallmchat_venv}"
+VENV_NAME=".venv"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-VENV_PATH="$(dirname "$SCRIPT_DIR")/$VENV_NAME"
+VENV_PATH="$SCRIPT_DIR/$VENV_NAME"
 PYTHON_MIN_VERSION="3.12"
 NODE_MIN_VERSION="14"
 CUDA_REQUIRED=true
