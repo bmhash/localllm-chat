@@ -126,92 +126,49 @@ MODELS_CONFIG = {
 }
 
 # Global cache for loaded models and tokenizers
-MODELS = {}
-TOKENIZERS = {}
+loaded_models = {}
+loaded_tokenizers = {}
+default_model = "llama-3.2-3b"
 
-def preload_models():
-    """Preload only the default Llama 3.2 model"""
-    logger.info("Starting model preloading...")
-    
-    try:
-        # Only load Llama 3.2 initially
-        preload_model("llama-3.2-3b")
-        logger.info("\nSuccessfully loaded default model:")
-        logger.info(f"  {MODELS_CONFIG['llama-3.2-3b']['name']}")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to load default model: {str(e)}")
-        return False
-
-def preload_model(model_id):
-    """Preload a model"""
+def load_model(model_id):
+    """Load a model and its tokenizer if not already loaded."""
     if model_id not in MODELS_CONFIG:
-        raise ValueError(f"Model {model_id} not found in config")
-    
-    config = MODELS_CONFIG[model_id]
-    model_path = config["model_id"]
-    
-    logger.info(f"Preloading {model_id}...")
-    logger.info("Loading tokenizer...")
-    
-    try:
-        # Some models require trust_remote_code
-        trust_remote_code = config.get("trust_remote_code", False)
+        raise ValueError(f"Model {model_id} not found in configurations")
+
+    if model_id not in loaded_models:
+        logger.info(f"Loading model {model_id}...")
+        config = MODELS_CONFIG[model_id]
         
+        # Load tokenizer if not already loaded
+        if model_id not in loaded_tokenizers:
+            logger.info("Loading tokenizer...")
+            tokenizer = AutoTokenizer.from_pretrained(config["model_id"])
+            loaded_tokenizers[model_id] = tokenizer
+
         # Configure quantization
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
             bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_quant_type="nf4",
             bnb_4bit_use_double_quant=True
         )
         
-        # Try to load from cache
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_path,
-                local_files_only=True,
-                trust_remote_code=trust_remote_code
-            )
-            
-            # Only use CPU offload for models >13GB since we have 24GB VRAM
-            model_size = config.get("size_gb", 0)
-            if model_size > 13:
-                logger.info(f"Very large model detected ({model_size}GB), using CPU offload for {model_id}")
-                max_memory = {0: "20GiB", "cpu": "48GiB"}
-            else:
-                # For smaller models, use most of GPU memory
-                logger.info(f"Loading model {model_id} ({model_size}GB) entirely on GPU")
-                max_memory = {0: "20GiB"}
-            
-            model = AutoModelForCausalLM.from_pretrained(
-                model_path,
-                local_files_only=True,
-                device_map="auto",
-                quantization_config=bnb_config,
-                torch_dtype=torch.float16,
-                trust_remote_code=trust_remote_code,
-                max_memory=max_memory,
-                offload_folder="offload"
-            )
-            
-            MODELS[model_id] = {
-                "model": model,
-                "tokenizer": tokenizer,
-                "config": config
-            }
-            
-            logger.info(f"Successfully preloaded {model_id}")
+        # Load model
+        logger.info(f"Loading model {model_id} (4-bit quantized)")
+        model = AutoModelForCausalLM.from_pretrained(
+            config["model_id"],
+            device_map="auto",
+            quantization_config=bnb_config,
+            trust_remote_code=True
+        )
+        loaded_models[model_id] = model
+        logger.info(f"Successfully loaded {model_id}")
 
-        except Exception as e:
-            logger.error(f"Error loading model: {str(e)}")
-            logger.error(f"Failed to preload {model_id}: {str(e)}")
-            raise
-    
-    except Exception as e:
-        logger.error(f"Error loading model: {str(e)}")
-        logger.error(f"Failed to preload {model_id}: {str(e)}")
-        raise
+    return loaded_models[model_id], loaded_tokenizers[model_id]
+
+# Preload the default model
+logger.info(f"Preloading {default_model}...")
+load_model(default_model)
 
 class ChatMessage(BaseModel):
     role: str
@@ -219,9 +176,9 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: List[ChatMessage]
-    model_id: str = "phi-2"
-    temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
+    model_id: str = default_model
+    temperature: Optional[float] = 0.7
+    max_tokens: Optional[int] = 1000
 
 def format_messages(messages: List[ChatMessage], model_id: str):
     """Format messages for the model"""
@@ -298,50 +255,31 @@ def generate_response(messages: List[ChatMessage], model, tokenizer, model_id: s
     
     return response
 
-@app.on_event("startup")
-async def startup_event():
-    """Server startup event - load models"""
-    if not preload_models():
-        logger.error("Failed to load models. Server cannot start.")
-        raise RuntimeError("No models available")
-
 @app.get("/api/models")
 async def list_models():
-    """List available models"""
-    return {"models": [{"id": k, "name": v["name"]} for k, v in MODELS_CONFIG.items()]}
+    """List available models."""
+    return {
+        "models": [
+            {"id": k, "name": v["name"]} 
+            for k, v in MODELS_CONFIG.items()
+        ]
+    }
 
 @app.get("/health")
-def health_check():
-    """Health check endpoint"""
-    loaded_models = [MODELS_CONFIG[model_id]["name"] for model_id in MODELS.keys()]
+async def health_check():
+    """Health check endpoint."""
     return {
-        "status": "ok",
-        "loaded_models": loaded_models,
+        "status": "healthy",
+        "loaded_models": list(loaded_models.keys()),
         "total_models": len(loaded_models)
     }
 
-@app.post("/chat")
+@app.post("/api/chat")
 async def chat(request: ChatRequest):
-    """Chat endpoint"""
+    """Chat endpoint."""
     try:
-        model_id = request.model_id
-
-        # Check if model exists in config
-        if model_id not in MODELS_CONFIG:
-            raise HTTPException(status_code=400, detail=f"Model {model_id} not found")
-        
-        # Load model if not already loaded
-        if model_id not in MODELS:
-            try:
-                preload_model(model_id)
-                logger.info(f"Loaded model {model_id} on demand")
-            except Exception as e:
-                logger.error(f"Failed to load model {model_id}: {str(e)}")
-                raise HTTPException(status_code=500, detail=f"Failed to load model {model_id}")
-
-        model_data = MODELS[model_id]
-        model = model_data["model"]
-        tokenizer = model_data["tokenizer"]
+        # Load the requested model if not already loaded
+        model, tokenizer = load_model(request.model_id)
         
         # Generate response
         response = generate_response(

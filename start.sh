@@ -106,7 +106,7 @@ fi
 
 # Start backend server
 echo -e "${GREEN}Starting backend server...${NC}"
-python server.py &
+uvicorn server:app --host 0.0.0.0 --port $BACKEND_PORT &
 BACKEND_PID=$!
 
 # Wait for backend to be ready
