@@ -89,6 +89,13 @@ setup_huggingface_token() {
                 echo "HUGGING_FACE_HUB_TOKEN=$token" >> "$HF_TOKEN_FILE"
                 echo -e "${GREEN}✓ Hugging Face token configured successfully${NC}"
                 
+                # Install huggingface_hub if not already installed
+                echo -e "\n${BLUE}Installing Hugging Face Hub...${NC}"
+                if ! python3 -m pip install --quiet huggingface_hub; then
+                    echo -e "${RED}Error: Failed to install huggingface_hub${NC}"
+                    return 1
+                fi
+                
                 # Login to Hugging Face Hub
                 echo -e "\n${BLUE}Logging in to Hugging Face Hub...${NC}"
                 source "$HF_TOKEN_FILE"

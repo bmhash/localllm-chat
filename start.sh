@@ -103,6 +103,13 @@ if ! grep -q "HUGGING_FACE_HUB_TOKEN" .env || grep -q "HUGGING_FACE_HUB_TOKEN=yo
     exit 1
 fi
 
+# Install huggingface_hub if not already installed
+echo -e "${BLUE}Installing Hugging Face Hub...${NC}"
+if ! python3 -m pip install --quiet huggingface_hub; then
+    echo -e "${RED}Error: Failed to install huggingface_hub${NC}"
+    exit 1
+fi
+
 # Login to Hugging Face Hub
 echo -e "${BLUE}Logging in to Hugging Face Hub...${NC}"
 source .env
