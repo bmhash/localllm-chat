@@ -114,11 +114,6 @@ echo -e "\n${BLUE}Installing Python dependencies...${NC}"
 pip install -r requirements.txt
 check_status "Python dependencies installation"
 
-# Download models
-echo -e "\n${BLUE}Downloading language models...${NC}"
-python3 install_models.py
-check_status "Model download"
-
 # Set up frontend
 echo -e "\n${BLUE}Setting up frontend...${NC}"
 cd chat-interface || {
@@ -148,6 +143,8 @@ if [ ! -f ".env" ]; then
         echo -e "1. Go to ${GREEN}https://huggingface.co/join${NC} to create an account"
         echo -e "2. After signing up, visit ${GREEN}https://huggingface.co/settings/tokens${NC} to create a token"
         echo -e "3. Once you have your token, edit the ${YELLOW}.env${NC} file and set HUGGING_FACE_TOKEN=your_token"
+        echo -e "\n${RED}Installation paused: Please add your token to .env and run ./install.sh again${NC}"
+        exit 1
     else
         echo -e "\n${BLUE}Please enter your HuggingFace token:${NC}"
         read -r token
@@ -156,14 +153,23 @@ if [ ! -f ".env" ]; then
             echo -e "${GREEN}✓ Token added to .env file${NC}"
         else
             echo -e "${YELLOW}No token provided. Please edit the .env file later and add your token${NC}"
+            echo -e "\n${RED}Installation paused: Please add your token to .env and run ./install.sh again${NC}"
+            exit 1
         fi
     fi
 fi
 
+# Download models
+if [ -f ".env" ] && grep -q "HUGGING_FACE_TOKEN=.*[^[:space:]]" .env; then
+    echo -e "\n${BLUE}Downloading language models...${NC}"
+    python3 install_models.py
+    check_status "Model download"
+else
+    echo -e "${RED}Error: Cannot download models without a valid HuggingFace token in .env${NC}"
+    exit 1
+fi
+
 echo -e "\n${GREEN}Installation completed successfully!${NC}"
 echo -e "${BLUE}Next steps:${NC}"
-if [[ $has_token =~ ^[Nn]$ ]] || [ -z "$token" ]; then
-    echo -e "1. Get your HuggingFace token and add it to the ${YELLOW}.env${NC} file"
-fi
-echo -e "2. Run ${YELLOW}./start.sh${NC} to start the application"
-echo -e "3. Open ${YELLOW}http://localhost:3000${NC} in your browser\n"
+echo -e "1. Run ${YELLOW}./start.sh${NC} to start the application"
+echo -e "2. Open ${YELLOW}http://localhost:3000${NC} in your browser\n"
