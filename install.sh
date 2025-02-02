@@ -129,16 +129,36 @@ fi
 npm install
 check_status "Node.js dependencies installation"
 
-# Create .env file if it doesn't exist
+# Create .env file and handle HuggingFace token
 cd ..
 if [ ! -f ".env" ]; then
-    echo -e "\n${BLUE}Creating .env file...${NC}"
+    echo -e "\n${BLUE}Setting up environment configuration...${NC}"
     cp .env.example .env
-    echo -e "${YELLOW}Please edit .env file and add your Hugging Face token${NC}"
+    
+    echo -e "\n${BLUE}Do you have a HuggingFace account and token? (y/n)${NC}"
+    read -r has_token
+    
+    if [[ $has_token =~ ^[Nn]$ ]]; then
+        echo -e "\n${YELLOW}To use this application, you'll need a HuggingFace account and token:${NC}"
+        echo -e "1. Go to ${GREEN}https://huggingface.co/join${NC} to create an account"
+        echo -e "2. After signing up, visit ${GREEN}https://huggingface.co/settings/tokens${NC} to create a token"
+        echo -e "3. Once you have your token, edit the ${YELLOW}.env${NC} file and set HUGGING_FACE_TOKEN=your_token"
+    else
+        echo -e "\n${BLUE}Please enter your HuggingFace token:${NC}"
+        read -r token
+        if [ -n "$token" ]; then
+            sed -i "s/HUGGING_FACE_TOKEN=/HUGGING_FACE_TOKEN=$token/" .env
+            echo -e "${GREEN}✓ Token added to .env file${NC}"
+        else
+            echo -e "${YELLOW}No token provided. Please edit the .env file later and add your token${NC}"
+        fi
+    fi
 fi
 
 echo -e "\n${GREEN}Installation completed successfully!${NC}"
 echo -e "${BLUE}Next steps:${NC}"
-echo -e "1. Edit the ${YELLOW}.env${NC} file and add your Hugging Face token"
+if [[ $has_token =~ ^[Nn]$ ]] || [ -z "$token" ]; then
+    echo -e "1. Get your HuggingFace token and add it to the ${YELLOW}.env${NC} file"
+fi
 echo -e "2. Run ${YELLOW}./start.sh${NC} to start the application"
 echo -e "3. Open ${YELLOW}http://localhost:3000${NC} in your browser\n"
