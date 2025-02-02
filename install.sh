@@ -88,6 +88,15 @@ setup_huggingface_token() {
                 # Add new token
                 echo "HUGGING_FACE_HUB_TOKEN=$token" >> "$HF_TOKEN_FILE"
                 echo -e "${GREEN}✓ Hugging Face token configured successfully${NC}"
+                
+                # Login to Hugging Face Hub
+                echo -e "\n${BLUE}Logging in to Hugging Face Hub...${NC}"
+                source "$HF_TOKEN_FILE"
+                if ! python3 -c "from huggingface_hub import login; login(token='$token', write_permission=False)"; then
+                    echo -e "${RED}Error: Failed to login to Hugging Face Hub${NC}"
+                    return 1
+                fi
+                echo -e "${GREEN}✓ Successfully logged in to Hugging Face Hub${NC}"
                 break
                 ;;
             2)

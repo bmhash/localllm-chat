@@ -103,6 +103,15 @@ if ! grep -q "HUGGING_FACE_HUB_TOKEN" .env || grep -q "HUGGING_FACE_HUB_TOKEN=yo
     exit 1
 fi
 
+# Login to Hugging Face Hub
+echo -e "${BLUE}Logging in to Hugging Face Hub...${NC}"
+source .env
+if ! python3 -c "from huggingface_hub import login; login(token='$HUGGING_FACE_HUB_TOKEN', write_permission=False)"; then
+    echo -e "${RED}Error: Failed to login to Hugging Face Hub${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ Successfully logged in to Hugging Face Hub${NC}"
+
 # Verify models are downloaded
 echo -e "${BLUE}Verifying model downloads...${NC}"
 python3 -c "
