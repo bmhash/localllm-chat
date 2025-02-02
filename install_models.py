@@ -1,295 +1,339 @@
-#!/usr/bin/env python3
+"""
+Model Installation Module
+
+This module handles the downloading and verification of models from HuggingFace.
+It includes features for:
+- Checking available disk space
+- Downloading models with progress tracking
+- MD5 checksum verification
+- Retry logic for failed downloads
+- Structured logging of installation progress
+"""
+
 import os
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import torch
-from transformers import BitsAndBytesConfig
-from dotenv import load_dotenv
-from huggingface_hub import HfApi
+import sys
 import hashlib
 import requests
+import shutil
+from pathlib import Path
+from typing import Optional, Dict, Any
+from tqdm import tqdm
+import time
 import json
 
-# Load environment variables
-print("Loading environment from .env file...")
-env_path = os.path.join(os.path.dirname(__file__), '.env')
-if not os.path.exists(env_path):
-    raise ValueError(f"No .env file found at {env_path}")
-print(f"Found .env file at: {env_path}")
+from huggingface_hub import (
+    HfApi,
+    hf_hub_download,
+    login,
+    ModelFilter,
+    CommitInfo
+)
 
-load_dotenv(env_path)
+from config.models import (
+    MODELS_CONFIG,
+    get_model_config,
+    get_total_required_space,
+    validate_model_id
+)
+from utils.logging import setup_logging
 
-# Get Hugging Face token
-token = os.getenv("HUGGING_FACE_HUB_TOKEN")
-if not token:
-    raise ValueError(
-        "Please set HUGGING_FACE_HUB_TOKEN in your .env file.\n"
-        "You can get your token from: https://huggingface.co/settings/tokens"
+# Set up logging
+setup_logging(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    json_output=os.getenv("JSON_LOGGING", "true").lower() == "true",
+    log_file="install.log"
+)
+
+import logging
+logger = logging.getLogger(__name__)
+
+def check_disk_space(required_gb: float, path: str = ".") -> bool:
+    """
+    Check if there's enough disk space available.
+    
+    Args:
+        required_gb: Required space in gigabytes
+        path: Path to check space on
+        
+    Returns:
+        Boolean indicating if there's enough space
+    """
+    total, used, free = shutil.disk_usage(path)
+    free_gb = free / (1024**3)
+    
+    # Add 20% buffer for safety
+    required_with_buffer = required_gb * 1.2
+    
+    logger.info(
+        "Checking disk space",
+        extra={
+            "metrics": {
+                "required_gb": required_gb,
+                "free_gb": free_gb,
+                "buffer_gb": required_with_buffer - required_gb
+            }
+        }
     )
+    
+    return free_gb >= required_with_buffer
 
-# Model configurations - keep in sync with server.py
-MODELS_CONFIG = {
-    "llama-3.2-3b": {
-        "name": "Llama 3.2 3B Instruct",
-        "model_id": "meta-llama/Llama-3.2-3B-Instruct",
-        "context_length": 4096,
-        "temperature": 0.7,
-        "max_new_tokens": 500,
-        "load_in_4bit": True,
-        "checksum_url": "https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct/raw/main/checksums.md5"
-    },
-    "deepseek-7b": {
-        "name": "Deepseek Coder 7B",
-        "model_id": "deepseek-ai/deepseek-coder-7b-instruct-v1.5",
-        "context_length": 8192,
-        "temperature": 0.7,
-        "max_new_tokens": 4096,
-        "load_in_4bit": True,
-        "checksum_url": "https://huggingface.co/deepseek-ai/deepseek-coder-7b-instruct-v1.5/raw/main/checksums.md5"
-    },
-    "codellama-7b": {
-        "name": "CodeLlama 7B Instruct",
-        "model_id": "codellama/CodeLlama-7b-Instruct-hf",
-        "context_length": 8192,
-        "temperature": 0.7,
-        "max_new_tokens": 4096,
-        "load_in_4bit": True,
-        "checksum_url": "https://huggingface.co/codellama/CodeLlama-7b-Instruct-hf/raw/main/checksums.md5"
-    },
-    "codellama-13b": {
-        "name": "CodeLlama 13B Instruct",
-        "model_id": "codellama/CodeLlama-13b-Instruct-hf",
-        "context_length": 8192,
-        "temperature": 0.7,
-        "max_new_tokens": 4096,
-        "load_in_4bit": True,
-        "checksum_url": "https://huggingface.co/codellama/CodeLlama-13b-Instruct-hf/raw/main/checksums.md5"
-    },
-    "mistral-7b": {
-        "name": "Mistral 7B Instruct v0.3",
-        "model_id": "mistralai/Mistral-7B-Instruct-v0.3",
-        "context_length": 8192,
-        "temperature": 0.7,
-        "max_new_tokens": 4096,
-        "load_in_4bit": True,
-        "checksum_url": "https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3/raw/main/checksums.md5"
-    },
-    "deepseek-moe-16b": {
-        "name": "Deepseek MoE 16B",
-        "model_id": "deepseek-ai/deepseek-moe-16b-chat",
-        "context_length": 8192,
-        "temperature": 0.7,
-        "max_new_tokens": 4096,
-        "load_in_4bit": True,
-        "trust_remote_code": True,
-        "checksum_url": "https://huggingface.co/deepseek-ai/deepseek-moe-16b-chat/raw/main/checksums.md5"
-    },
-    "phi-2": {
-        "name": "Microsoft Phi-2",
-        "model_id": "microsoft/phi-2",
-        "context_length": 2048,
-        "temperature": 0.7,
-        "max_new_tokens": 1024,
-        "load_in_4bit": True,
-        "checksum_url": "https://huggingface.co/microsoft/phi-2/raw/main/checksums.md5"
-    },
-    "neural-chat-7b": {
-        "name": "Neural Chat 7B",
-        "model_id": "Intel/neural-chat-7b-v3-1",
-        "context_length": 8192,
-        "temperature": 0.7,
-        "max_new_tokens": 4096,
-        "load_in_4bit": True,
-        "checksum_url": "https://huggingface.co/Intel/neural-chat-7b-v3-1/raw/main/checksums.md5"
-    }
-}
-
-def verify_token():
-    """Verify Hugging Face token and print user info"""
+def get_model_files(model_id: str) -> Dict[str, Any]:
+    """
+    Get information about model files from HuggingFace.
+    
+    Args:
+        model_id: HuggingFace model identifier
+        
+    Returns:
+        Dict containing file information
+        
+    Raises:
+        ValueError: If model files cannot be retrieved
+    """
     try:
-        api = HfApi(token=token)
-        user_info = api.whoami()
-        print("✓ Token verified successfully")
-        print(f"✓ Logged in as: {user_info['name']}")
-        return True
+        api = HfApi()
+        files = api.model_info(
+            model_id,
+            token=os.getenv("HUGGING_FACE_HUB_TOKEN")
+        ).siblings
+        
+        return {
+            file.rfilename: {
+                "size": file.size,
+                "blob_id": file.blob_id
+            }
+            for file in files
+        }
     except Exception as e:
-        print(f"\n❌ Token verification failed: {str(e)}")
-        print("Please check your token in .env file")
-        print("Get your token from: https://huggingface.co/settings/tokens")
-        return False
-
-def check_model_files(model_id: str) -> bool:
-    """Check if model exists in huggingface cache"""
-    if model_id not in MODELS_CONFIG:
-        return False
-    
-    config = MODELS_CONFIG[model_id]
-    model_path = config["model_id"]
-    
-    try:
-        # Try to load with local_files_only=True to check cache
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_path,
-            local_files_only=True,  # Only check local cache
-            trust_remote_code=config.get("trust_remote_code", False)
+        logger.error(
+            f"Failed to get model files for {model_id}",
+            extra={"error": str(e)},
+            exc_info=True
         )
-        
-        model = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            local_files_only=True,  # Only check local cache
-            device_map="auto",
-            trust_remote_code=config.get("trust_remote_code", False)
-        )
-        return True
-    except Exception:
-        return False
+        raise ValueError(f"Could not get model files: {str(e)}")
 
-def verify_checksum(file_path: str, expected_md5: str) -> bool:
-    """Verify the MD5 checksum of a file."""
-    print(f"Verifying checksum for {os.path.basename(file_path)}...")
+def download_file(
+    url: str,
+    dest_path: Path,
+    desc: str,
+    max_retries: int = 3
+) -> bool:
+    """
+    Download a file with progress tracking and retries.
     
-    if not os.path.exists(file_path):
-        print(f"File not found: {file_path}")
-        return False
+    Args:
+        url: URL to download from
+        dest_path: Path to save file to
+        desc: Description for progress bar
+        max_retries: Maximum number of retry attempts
         
+    Returns:
+        Boolean indicating success
+    """
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, stream=True)
+            response.raise_for_status()
+            
+            total_size = int(response.headers.get('content-length', 0))
+            block_size = 1024  # 1 KB
+            
+            with tqdm(
+                total=total_size,
+                unit='iB',
+                unit_scale=True,
+                desc=desc
+            ) as progress_bar:
+                with open(dest_path, 'wb') as f:
+                    for data in response.iter_content(block_size):
+                        progress_bar.update(len(data))
+                        f.write(data)
+                        
+            if total_size != 0 and progress_bar.n != total_size:
+                raise RuntimeError("Downloaded size does not match expected size")
+                
+            return True
+            
+        except Exception as e:
+            logger.warning(
+                f"Download attempt {attempt + 1} failed",
+                extra={
+                    "error": str(e),
+                    "url": url,
+                    "attempt": attempt + 1
+                }
+            )
+            if attempt + 1 == max_retries:
+                logger.error(
+                    "Download failed after all retries",
+                    extra={"url": url},
+                    exc_info=True
+                )
+                return False
+            time.sleep(2 ** attempt)  # Exponential backoff
+    
+    return False
+
+def verify_checksum(file_path: Path, expected_md5: str) -> bool:
+    """
+    Verify file MD5 checksum.
+    
+    Args:
+        file_path: Path to file to verify
+        expected_md5: Expected MD5 hash
+        
+    Returns:
+        Boolean indicating if checksum matches
+    """
     md5_hash = hashlib.md5()
+    
     with open(file_path, "rb") as f:
-        # Read the file in chunks to handle large files
         for chunk in iter(lambda: f.read(4096), b""):
             md5_hash.update(chunk)
             
-    computed_md5 = md5_hash.hexdigest()
-    is_valid = computed_md5 == expected_md5
+    actual_md5 = md5_hash.hexdigest()
     
-    if is_valid:
-        print(f"✅ Checksum verification passed for {os.path.basename(file_path)}")
-    else:
-        print(f"❌ Checksum verification failed for {os.path.basename(file_path)}")
-        print(f"Expected: {expected_md5}")
-        print(f"Got: {computed_md5}")
-        
-    return is_valid
+    logger.info(
+        "Verifying checksum",
+        extra={
+            "file": str(file_path),
+            "expected_md5": expected_md5,
+            "actual_md5": actual_md5
+        }
+    )
+    
+    return actual_md5 == expected_md5
 
-def get_model_checksums(checksum_url: str) -> dict:
-    """Get the MD5 checksums for model files from HuggingFace."""
-    try:
-        response = requests.get(checksum_url, headers={"Authorization": f"Bearer {token}"})
-        response.raise_for_status()
+def download_model(model_id: str, force: bool = False) -> bool:
+    """
+    Download a model and verify its integrity.
+    
+    Args:
+        model_id: ID of model to download
+        force: Whether to force download even if files exist
         
-        checksums = {}
-        for line in response.text.split('\n'):
-            if line.strip():
-                md5sum, filename = line.strip().split()
-                checksums[filename] = md5sum
-        return checksums
-    except Exception as e:
-        print(f"Warning: Could not fetch checksums from {checksum_url}: {str(e)}")
-        return {}
-
-def download_model(model_id: str):
-    """Download a model to huggingface cache if not already present."""
-    print(f"\nChecking/downloading model: {model_id}")
+    Returns:
+        Boolean indicating success
+    """
+    if not validate_model_id(model_id):
+        logger.error(f"Invalid model ID: {model_id}")
+        return False
+        
+    config = get_model_config(model_id)
+    logger.info(f"Preparing to download {config['name']}")
+    
+    # Check disk space
+    if not check_disk_space(config["size_gb"]):
+        logger.error(
+            "Insufficient disk space",
+            extra={"required_gb": config["size_gb"]}
+        )
+        return False
     
     try:
-        # Get model config
-        model_config = None
-        for config in MODELS_CONFIG.values():
-            if config["model_id"] == model_id:
-                model_config = config
-                break
-                
-        if not model_config:
-            raise ValueError(f"Model {model_id} not found in MODELS_CONFIG")
+        # Get model files
+        files = get_model_files(config["model_id"])
+        
+        # Create cache directory
+        cache_dir = Path(".cache/huggingface")
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Download and verify each file
+        success = True
+        for filename, info in files.items():
+            file_path = cache_dir / filename
             
-        # Get checksums first
-        checksums = get_model_checksums(model_config["checksum_url"])
-        
-        # Download and verify tokenizer
-        print("Downloading tokenizer...")
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_id,
-            token=token,
-            trust_remote_code=True
+            if file_path.exists() and not force:
+                logger.info(f"File already exists: {filename}")
+                continue
+                
+            # Download file
+            success &= download_file(
+                url=f"https://huggingface.co/{config['model_id']}/resolve/main/{filename}",
+                dest_path=file_path,
+                desc=f"Downloading {filename}"
+            )
+            
+            if not success:
+                logger.error(f"Failed to download {filename}")
+                return False
+                
+            # Verify checksum if available
+            if config.get("checksum_url"):
+                checksums = requests.get(config["checksum_url"]).text
+                expected_md5 = next(
+                    (line.split()[0] for line in checksums.splitlines()
+                     if filename in line),
+                    None
+                )
+                
+                if expected_md5:
+                    if not verify_checksum(file_path, expected_md5):
+                        logger.error(
+                            f"Checksum verification failed for {filename}",
+                            extra={
+                                "file": str(file_path),
+                                "model_id": model_id
+                            }
+                        )
+                        return False
+                        
+        logger.info(
+            f"Successfully downloaded {config['name']}",
+            extra={"model_id": model_id}
         )
-        
-        # Verify tokenizer files
-        tokenizer_files = [f for f in os.listdir(tokenizer.vocab_file) if f.endswith('.model')]
-        for file in tokenizer_files:
-            file_path = os.path.join(tokenizer.vocab_file, file)
-            if file in checksums and not verify_checksum(file_path, checksums[file]):
-                raise ValueError(f"Checksum verification failed for tokenizer file: {file}")
-        
-        # Download and verify model
-        print("Downloading model...")
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=model_config.get("load_in_4bit", False),
-            bnb_4bit_compute_dtype=torch.float16,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-        )
-        
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            token=token,
-            quantization_config=quantization_config,
-            trust_remote_code=True,
-            device_map="auto"
-        )
-        
-        # Verify model files
-        model_files = [f for f in os.listdir(model.config.name_or_path) if f.endswith('.bin')]
-        for file in model_files:
-            file_path = os.path.join(model.config.name_or_path, file)
-            if file in checksums and not verify_checksum(file_path, checksums[file]):
-                raise ValueError(f"Checksum verification failed for model file: {file}")
-        
-        print(f"✅ Successfully downloaded and verified {model_id}")
         return True
         
     except Exception as e:
-        print(f"Error downloading model {model_id}: {str(e)}")
+        logger.error(
+            f"Error downloading {model_id}",
+            extra={"error": str(e)},
+            exc_info=True
+        )
         return False
 
 def main():
-    """Check and download models"""
-    print("\nVerifying token: " + token[:2] + "..." + token[-4:])
-    if not verify_token():
-        return
-    
-    print("\nChecking installed models...")
-    
-    # First check what's available
-    available_models = []
-    missing_models = []
-    
-    for model_id in MODELS_CONFIG:
-        config = MODELS_CONFIG[model_id]
-        if check_model_files(model_id):
-            available_models.append(config["name"])
-        else:
-            missing_models.append((model_id, config["name"]))
-    
-    # Print status
-    print("\nModel Status:")
-    print("------------\n")
-    
-    if available_models:
-        print("✓ Available models:")
-        for name in available_models:
-            print(f"  - {name}")
-        print()
-    
-    if missing_models:
-        print("❌ Missing models:")
-        for _, name in missing_models:
-            print(f"  - {name}")
-        print()
+    """Main entry point for model installation."""
+    # Check for HuggingFace token
+    token = os.getenv("HUGGING_FACE_HUB_TOKEN")
+    if not token:
+        logger.error("HUGGING_FACE_HUB_TOKEN not set in environment")
+        sys.exit(1)
         
-        # Download missing models
-        print("Downloading missing models...")
-        for model_id, _ in missing_models:
-            download_model(model_id)
-    else:
-        print("All models are already downloaded!")
+    # Login to HuggingFace
+    try:
+        login(token=token)
+    except Exception as e:
+        logger.error(
+            "Failed to login to HuggingFace",
+            extra={"error": str(e)},
+            exc_info=True
+        )
+        sys.exit(1)
+    
+    # Calculate total required space
+    total_gb = get_total_required_space()
+    
+    # Check total disk space
+    if not check_disk_space(total_gb):
+        logger.error(
+            "Insufficient disk space for all models",
+            extra={"required_gb": total_gb}
+        )
+        sys.exit(1)
+    
+    # Download each model
+    success = True
+    for model_id in MODELS_CONFIG:
+        if not download_model(model_id):
+            success = False
+            logger.error(f"Failed to download {model_id}")
+    
+    if not success:
+        logger.error("Some models failed to download")
+        sys.exit(1)
+        
+    logger.info("All models downloaded successfully")
 
 if __name__ == "__main__":
     main()
