@@ -8,6 +8,7 @@ It includes features for:
 - MD5 checksum verification
 - Retry logic for failed downloads
 - Structured logging of installation progress
+- Handling gated model access requests
 """
 
 import os
@@ -38,6 +39,7 @@ from config.models import (
     validate_model_id
 )
 from utils.logging import setup_logging
+from utils.model_access import check_model_access, request_model_access, wait_for_model_access
 
 # Set up logging
 setup_logging(
@@ -239,6 +241,18 @@ def download_model(model_id: str, force: bool = False) -> bool:
         return False
     
     try:
+        # Check and request model access if needed
+        if not check_model_access(config["model_id"]):
+            logger.info(f"Model {config['name']} requires access request")
+            if not request_model_access(config["model_id"]):
+                logger.error(f"Failed to request access to {config['name']}")
+                return False
+                
+            # Wait for access to be granted
+            if not wait_for_model_access(config["model_id"]):
+                logger.error(f"Access not granted to {config['name']}")
+                return False
+        
         # Get model files
         files = get_model_files(config["model_id"])
         
