@@ -246,15 +246,66 @@ def download_model(model_id: str, force: bool = False) -> bool:
         cache_dir = Path(".cache/huggingface")
         cache_dir.mkdir(parents=True, exist_ok=True)
         
+        # Get checksums if available
+        checksums = {}
+        if config.get("checksum_url"):
+            try:
+                response = requests.get(config["checksum_url"])
+                response.raise_for_status()
+                checksum_text = response.text
+                checksums = {
+                    line.split()[1]: line.split()[0]
+                    for line in checksum_text.splitlines()
+                    if len(line.split()) >= 2
+                }
+            except Exception as e:
+                logger.warning(
+                    "Failed to fetch checksums",
+                    extra={"error": str(e), "url": config["checksum_url"]}
+                )
+        
         # Download and verify each file
         success = True
         for file in files["files"]:
             file_path = cache_dir / file.rfilename
+            expected_size = file.size if file.size is not None else None
+            expected_md5 = checksums.get(file.rfilename)
             
+            # Check if file exists and verify its integrity
             if file_path.exists() and not force:
-                logger.info(f"File already exists: {file.rfilename}")
-                continue
+                file_valid = True
                 
+                # Check file size if we know the expected size
+                if expected_size is not None:
+                    actual_size = file_path.stat().st_size
+                    if actual_size != expected_size:
+                        logger.warning(
+                            f"Size mismatch for {file.rfilename}",
+                            extra={
+                                "expected_size": expected_size,
+                                "actual_size": actual_size
+                            }
+                        )
+                        file_valid = False
+                
+                # Check MD5 if available
+                if expected_md5 and file_valid:
+                    if not verify_checksum(file_path, expected_md5):
+                        logger.warning(
+                            f"Checksum mismatch for {file.rfilename}",
+                            extra={
+                                "file": str(file_path),
+                                "expected_md5": expected_md5
+                            }
+                        )
+                        file_valid = False
+                
+                if file_valid:
+                    logger.info(f"File already exists and is valid: {file.rfilename}")
+                    continue
+                else:
+                    logger.warning(f"File exists but is invalid, re-downloading: {file.rfilename}")
+            
             # Download file
             success &= download_file(
                 url=f"https://huggingface.co/{config['model_id']}/resolve/main/{file.rfilename}",
@@ -265,27 +316,32 @@ def download_model(model_id: str, force: bool = False) -> bool:
             if not success:
                 logger.error(f"Failed to download {file.rfilename}")
                 return False
-                
-            # Verify checksum if available
-            if config.get("checksum_url"):
-                checksums = requests.get(config["checksum_url"]).text
-                expected_md5 = next(
-                    (line.split()[0] for line in checksums.splitlines()
-                     if file.rfilename in line),
-                    None
-                )
-                
-                if expected_md5:
-                    if not verify_checksum(file_path, expected_md5):
-                        logger.error(
-                            f"Checksum verification failed for {file.rfilename}",
-                            extra={
-                                "file": str(file_path),
-                                "model_id": model_id
-                            }
-                        )
-                        return False
-                        
+            
+            # Verify size
+            if expected_size is not None:
+                actual_size = file_path.stat().st_size
+                if actual_size != expected_size:
+                    logger.error(
+                        f"Size verification failed for {file.rfilename}",
+                        extra={
+                            "expected_size": expected_size,
+                            "actual_size": actual_size
+                        }
+                    )
+                    return False
+            
+            # Verify checksum
+            if expected_md5:
+                if not verify_checksum(file_path, expected_md5):
+                    logger.error(
+                        f"Checksum verification failed for {file.rfilename}",
+                        extra={
+                            "file": str(file_path),
+                            "model_id": model_id
+                        }
+                    )
+                    return False
+        
         logger.info(
             f"Successfully downloaded {config['name']}",
             extra={"model_id": model_id}
