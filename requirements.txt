@@ -16,3 +16,4 @@ tenacity==8.2.3
 # Optional dependencies for better performance
 ninja==1.11.1
 safetensors==0.4.1
+protobuf==4.25.2

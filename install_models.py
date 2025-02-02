@@ -5,6 +5,9 @@ import torch
 from transformers import BitsAndBytesConfig
 from dotenv import load_dotenv
 from huggingface_hub import HfApi
+import hashlib
+import requests
+import json
 
 # Load environment variables
 print("Loading environment from .env file...")
@@ -31,7 +34,8 @@ MODELS_CONFIG = {
         "context_length": 4096,
         "temperature": 0.7,
         "max_new_tokens": 500,
-        "load_in_4bit": True
+        "load_in_4bit": True,
+        "checksum_url": "https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct/raw/main/checksums.md5"
     },
     "deepseek-7b": {
         "name": "Deepseek Coder 7B",
@@ -39,7 +43,8 @@ MODELS_CONFIG = {
         "context_length": 8192,
         "temperature": 0.7,
         "max_new_tokens": 4096,
-        "load_in_4bit": True
+        "load_in_4bit": True,
+        "checksum_url": "https://huggingface.co/deepseek-ai/deepseek-coder-7b-instruct-v1.5/raw/main/checksums.md5"
     },
     "codellama-7b": {
         "name": "CodeLlama 7B Instruct",
@@ -47,7 +52,8 @@ MODELS_CONFIG = {
         "context_length": 8192,
         "temperature": 0.7,
         "max_new_tokens": 4096,
-        "load_in_4bit": True
+        "load_in_4bit": True,
+        "checksum_url": "https://huggingface.co/codellama/CodeLlama-7b-Instruct-hf/raw/main/checksums.md5"
     },
     "codellama-13b": {
         "name": "CodeLlama 13B Instruct",
@@ -55,7 +61,8 @@ MODELS_CONFIG = {
         "context_length": 8192,
         "temperature": 0.7,
         "max_new_tokens": 4096,
-        "load_in_4bit": True
+        "load_in_4bit": True,
+        "checksum_url": "https://huggingface.co/codellama/CodeLlama-13b-Instruct-hf/raw/main/checksums.md5"
     },
     "mistral-7b": {
         "name": "Mistral 7B Instruct v0.3",
@@ -63,7 +70,8 @@ MODELS_CONFIG = {
         "context_length": 8192,
         "temperature": 0.7,
         "max_new_tokens": 4096,
-        "load_in_4bit": True
+        "load_in_4bit": True,
+        "checksum_url": "https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3/raw/main/checksums.md5"
     },
     "deepseek-moe-16b": {
         "name": "Deepseek MoE 16B",
@@ -72,7 +80,8 @@ MODELS_CONFIG = {
         "temperature": 0.7,
         "max_new_tokens": 4096,
         "load_in_4bit": True,
-        "trust_remote_code": True
+        "trust_remote_code": True,
+        "checksum_url": "https://huggingface.co/deepseek-ai/deepseek-moe-16b-chat/raw/main/checksums.md5"
     },
     "phi-2": {
         "name": "Microsoft Phi-2",
@@ -80,7 +89,8 @@ MODELS_CONFIG = {
         "context_length": 2048,
         "temperature": 0.7,
         "max_new_tokens": 1024,
-        "load_in_4bit": True
+        "load_in_4bit": True,
+        "checksum_url": "https://huggingface.co/microsoft/phi-2/raw/main/checksums.md5"
     },
     "neural-chat-7b": {
         "name": "Neural Chat 7B",
@@ -88,7 +98,8 @@ MODELS_CONFIG = {
         "context_length": 8192,
         "temperature": 0.7,
         "max_new_tokens": 4096,
-        "load_in_4bit": True
+        "load_in_4bit": True,
+        "checksum_url": "https://huggingface.co/Intel/neural-chat-7b-v3-1/raw/main/checksums.md5"
     }
 }
 
@@ -132,64 +143,110 @@ def check_model_files(model_id: str) -> bool:
     except Exception:
         return False
 
-def download_model(model_id: str):
-    """Download a model to huggingface cache if not already present"""
-    if model_id not in MODELS_CONFIG:
-        print(f"Model {model_id} not found in config")
+def verify_checksum(file_path: str, expected_md5: str) -> bool:
+    """Verify the MD5 checksum of a file."""
+    print(f"Verifying checksum for {os.path.basename(file_path)}...")
+    
+    if not os.path.exists(file_path):
+        print(f"File not found: {file_path}")
         return False
+        
+    md5_hash = hashlib.md5()
+    with open(file_path, "rb") as f:
+        # Read the file in chunks to handle large files
+        for chunk in iter(lambda: f.read(4096), b""):
+            md5_hash.update(chunk)
+            
+    computed_md5 = md5_hash.hexdigest()
+    is_valid = computed_md5 == expected_md5
     
-    config = MODELS_CONFIG[model_id]
-    model_path = config["model_id"]
-    
-    # Skip if already in cache
-    if check_model_files(model_id):
-        print(f"✓ {config['name']} already in cache")
-        return True
-    
-    print(f"\nDownloading {config['name']} ({model_path})...")
+    if is_valid:
+        print(f"✅ Checksum verification passed for {os.path.basename(file_path)}")
+    else:
+        print(f"❌ Checksum verification failed for {os.path.basename(file_path)}")
+        print(f"Expected: {expected_md5}")
+        print(f"Got: {computed_md5}")
+        
+    return is_valid
+
+def get_model_checksums(checksum_url: str) -> dict:
+    """Get the MD5 checksums for model files from HuggingFace."""
+    try:
+        response = requests.get(checksum_url, headers={"Authorization": f"Bearer {token}"})
+        response.raise_for_status()
+        
+        checksums = {}
+        for line in response.text.split('\n'):
+            if line.strip():
+                md5sum, filename = line.strip().split()
+                checksums[filename] = md5sum
+        return checksums
+    except Exception as e:
+        print(f"Warning: Could not fetch checksums from {checksum_url}: {str(e)}")
+        return {}
+
+def download_model(model_id: str):
+    """Download a model to huggingface cache if not already present."""
+    print(f"\nChecking/downloading model: {model_id}")
     
     try:
-        # Configure quantization
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.float16,
-            bnb_4bit_use_double_quant=False
+        # Get model config
+        model_config = None
+        for config in MODELS_CONFIG.values():
+            if config["model_id"] == model_id:
+                model_config = config
+                break
+                
+        if not model_config:
+            raise ValueError(f"Model {model_id} not found in MODELS_CONFIG")
+            
+        # Get checksums first
+        checksums = get_model_checksums(model_config["checksum_url"])
+        
+        # Download and verify tokenizer
+        print("Downloading tokenizer...")
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_id,
+            token=token,
+            trust_remote_code=True
         )
         
-        # Some models require trust_remote_code
-        trust_remote_code = config.get("trust_remote_code", False)
+        # Verify tokenizer files
+        tokenizer_files = [f for f in os.listdir(tokenizer.vocab_file) if f.endswith('.model')]
+        for file in tokenizer_files:
+            file_path = os.path.join(tokenizer.vocab_file, file)
+            if file in checksums and not verify_checksum(file_path, checksums[file]):
+                raise ValueError(f"Checksum verification failed for tokenizer file: {file}")
         
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_path,
-                token=token,
-                trust_remote_code=trust_remote_code
-            )
-            
-            model = AutoModelForCausalLM.from_pretrained(
-                model_path,
-                token=token,
-                device_map="auto",
-                quantization_config=bnb_config,
-                torch_dtype=torch.float16,
-                trust_remote_code=trust_remote_code
-            )
-            print(f"✓ Successfully downloaded {config['name']}")
-            return True
-            
-        except Exception as e:
-            if "gated repo" in str(e).lower():
-                print(f"\n⚠️  {config['name']} requires access approval:")
-                print(f"Please visit https://huggingface.co/{model_path}")
-                print("Click 'Access Request' to request access.")
-                print("Once approved, your token will automatically work.\n")
-            else:
-                print(f"❌ Error downloading {config['name']}: {str(e)}")
-            return False
+        # Download and verify model
+        print("Downloading model...")
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=model_config.get("load_in_4bit", False),
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+        )
+        
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            token=token,
+            quantization_config=quantization_config,
+            trust_remote_code=True,
+            device_map="auto"
+        )
+        
+        # Verify model files
+        model_files = [f for f in os.listdir(model.config.name_or_path) if f.endswith('.bin')]
+        for file in model_files:
+            file_path = os.path.join(model.config.name_or_path, file)
+            if file in checksums and not verify_checksum(file_path, checksums[file]):
+                raise ValueError(f"Checksum verification failed for model file: {file}")
+        
+        print(f"✅ Successfully downloaded and verified {model_id}")
+        return True
         
     except Exception as e:
-        print(f"❌ Error downloading {config['name']}: {str(e)}")
+        print(f"Error downloading model {model_id}: {str(e)}")
         return False
 
 def main():

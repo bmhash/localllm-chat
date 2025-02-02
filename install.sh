@@ -8,7 +8,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-VENV_NAME="${VENV_NAME:-llama_env}"
+VENV_NAME="${VENV_NAME:-locallmchat_venv}"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 VENV_PATH="$(dirname "$SCRIPT_DIR")/$VENV_NAME"
 PYTHON_MIN_VERSION="3.12"
@@ -113,6 +113,11 @@ check_status "Pip upgrade"
 echo -e "\n${BLUE}Installing Python dependencies...${NC}"
 pip install -r requirements.txt
 check_status "Python dependencies installation"
+
+# Download models
+echo -e "\n${BLUE}Downloading language models...${NC}"
+python3 install_models.py
+check_status "Model download"
 
 # Set up frontend
 echo -e "\n${BLUE}Setting up frontend...${NC}"

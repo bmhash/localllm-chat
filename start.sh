@@ -8,7 +8,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Configuration
-VENV_NAME="${VENV_NAME:-llama_env}"
+VENV_NAME="${VENV_NAME:-locallmchat_venv}"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 VENV_PATH="$(dirname "$SCRIPT_DIR")/$VENV_NAME"
 BACKEND_PORT=8000
@@ -97,11 +97,28 @@ if [ ! -f .env ]; then
     exit 1
 fi
 
-if ! grep -q "HF_TOKEN" .env || grep -q "HF_TOKEN=your_token_here" .env; then
+if ! grep -q "HUGGING_FACE_TOKEN" .env || grep -q "HUGGING_FACE_TOKEN=your_token_here" .env; then
     echo -e "${RED}Error: Hugging Face token not set in .env${NC}"
     echo "Please add your token to .env file"
     exit 1
 fi
+
+# Verify models are downloaded
+echo -e "${BLUE}Verifying model downloads...${NC}"
+python3 -c "
+from install_models import check_model_files, MODELS_CONFIG
+missing = [model for model in MODELS_CONFIG.keys() if not check_model_files(model)]
+if missing:
+    print('Missing models:', ', '.join(missing))
+    print('Please run ./install.sh to download missing models')
+    exit(1)
+print('All models verified')
+"
+if [ $? -ne 0 ]; then
+    echo -e "${RED}Error: Some models are missing${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ All models verified${NC}"
 
 # Start backend server
 echo -e "${GREEN}Starting backend server...${NC}"
