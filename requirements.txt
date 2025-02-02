@@ -17,3 +17,9 @@ tenacity==8.2.3
 ninja==1.11.1
 safetensors==0.4.1
 protobuf==4.25.2
+
+# Testing dependencies
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+httpx==0.25.2  # For testing FastAPI
