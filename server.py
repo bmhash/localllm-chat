@@ -15,7 +15,7 @@ Features:
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
 import torch
 import os
@@ -78,6 +78,8 @@ class ChatRequest(BaseModel):
     """
     Represents a chat request with conversation history and parameters.
     """
+    model_config = ConfigDict(protected_namespaces=())
+    
     messages: List[ChatMessage] = Field(..., description="List of chat messages")
     model_id: str = Field(default=DEFAULT_MODEL, description="ID of the model to use")
     temperature: Optional[float] = Field(default=0.7, description="Sampling temperature")

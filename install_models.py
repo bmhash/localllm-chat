@@ -23,10 +23,12 @@ import json
 
 from huggingface_hub import (
     HfApi,
+    HfFolder,
+    Repository,
+    create_repo,
+    get_token,
     hf_hub_download,
     login,
-    ModelFilter,
-    CommitInfo
 )
 
 from config.models import (
@@ -98,16 +100,14 @@ def get_model_files(model_id: str) -> Dict[str, Any]:
         ).siblings
         
         return {
-            file.rfilename: {
-                "size": file.size,
-                "blob_id": file.blob_id
-            }
-            for file in files
+            "files": files,
+            "total_size": sum(f.size for f in files if f.size is not None)
         }
+        
     except Exception as e:
         logger.error(
-            f"Failed to get model files for {model_id}",
-            extra={"error": str(e)},
+            "Failed to get model files",
+            extra={"error": str(e), "model_id": model_id},
             exc_info=True
         )
         raise ValueError(f"Could not get model files: {str(e)}")
@@ -135,6 +135,7 @@ def download_file(
             response = requests.get(url, stream=True)
             response.raise_for_status()
             
+            # Get content length, default to 0 if not provided
             total_size = int(response.headers.get('content-length', 0))
             block_size = 1024  # 1 KB
             
@@ -145,12 +146,19 @@ def download_file(
                 desc=desc
             ) as progress_bar:
                 with open(dest_path, 'wb') as f:
+                    downloaded_size = 0
                     for data in response.iter_content(block_size):
+                        downloaded_size += len(data)
                         progress_bar.update(len(data))
                         f.write(data)
                         
-            if total_size != 0 and progress_bar.n != total_size:
+            # Only check size if content-length was provided
+            if total_size != 0 and downloaded_size != total_size:
                 raise RuntimeError("Downloaded size does not match expected size")
+                
+            # Verify file exists and has content
+            if not dest_path.exists() or dest_path.stat().st_size == 0:
+                raise RuntimeError("Downloaded file is empty or does not exist")
                 
             return True
             
@@ -240,22 +248,22 @@ def download_model(model_id: str, force: bool = False) -> bool:
         
         # Download and verify each file
         success = True
-        for filename, info in files.items():
-            file_path = cache_dir / filename
+        for file in files["files"]:
+            file_path = cache_dir / file.rfilename
             
             if file_path.exists() and not force:
-                logger.info(f"File already exists: {filename}")
+                logger.info(f"File already exists: {file.rfilename}")
                 continue
                 
             # Download file
             success &= download_file(
-                url=f"https://huggingface.co/{config['model_id']}/resolve/main/{filename}",
+                url=f"https://huggingface.co/{config['model_id']}/resolve/main/{file.rfilename}",
                 dest_path=file_path,
-                desc=f"Downloading {filename}"
+                desc=f"Downloading {file.rfilename}"
             )
             
             if not success:
-                logger.error(f"Failed to download {filename}")
+                logger.error(f"Failed to download {file.rfilename}")
                 return False
                 
             # Verify checksum if available
@@ -263,14 +271,14 @@ def download_model(model_id: str, force: bool = False) -> bool:
                 checksums = requests.get(config["checksum_url"]).text
                 expected_md5 = next(
                     (line.split()[0] for line in checksums.splitlines()
-                     if filename in line),
+                     if file.rfilename in line),
                     None
                 )
                 
                 if expected_md5:
                     if not verify_checksum(file_path, expected_md5):
                         logger.error(
-                            f"Checksum verification failed for {filename}",
+                            f"Checksum verification failed for {file.rfilename}",
                             extra={
                                 "file": str(file_path),
                                 "model_id": model_id

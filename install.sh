@@ -14,6 +14,7 @@ VENV_PATH="$SCRIPT_DIR/$VENV_NAME"
 PYTHON_MIN_VERSION="3.12"
 NODE_MIN_VERSION="14"
 CUDA_REQUIRED=true
+HF_TOKEN_FILE=".env"
 
 # Error handling
 set -e
@@ -46,22 +47,75 @@ version_greater_equal() {
     printf '%s\n%s\n' "$2" "$1" | sort -V -C
 }
 
+# Function to handle Hugging Face token
+setup_huggingface_token() {
+    local HF_TOKEN_FILE=".env"
+    local token
+    
+    if [ -f "$HF_TOKEN_FILE" ] && grep -q "HUGGING_FACE_HUB_TOKEN=" "$HF_TOKEN_FILE"; then
+        echo -e "${GREEN}Hugging Face token already configured${NC}"
+        return 0
+    fi
+    
+    echo -e "${YELLOW}A Hugging Face account and API token are required to download models.${NC}"
+    echo -e "1. Create an account at ${BLUE}https://huggingface.co/join${NC}"
+    echo -e "2. Go to ${BLUE}https://huggingface.co/settings/tokens${NC} to create an API token"
+    echo -e "\nPlease choose:"
+    echo -e "1) Enter your Hugging Face API token"
+    echo -e "2) Skip for now (you won't be able to download models)"
+    
+    while true; do
+        read -p "Enter your choice (1/2): " choice
+        case $choice in
+            1)
+                read -sp "Please paste your Hugging Face API token: " token
+                echo
+                
+                # Validate token is not empty
+                if [ -z "$token" ]; then
+                    echo -e "${RED}Error: Token cannot be empty${NC}"
+                    continue
+                fi
+                
+                # Create .env file if it doesn't exist
+                if [ ! -f "$HF_TOKEN_FILE" ]; then
+                    cp .env.example "$HF_TOKEN_FILE"
+                fi
+                
+                # Remove any existing token line
+                sed -i '/HUGGING_FACE_HUB_TOKEN=/d' "$HF_TOKEN_FILE"
+                
+                # Add new token
+                echo "HUGGING_FACE_HUB_TOKEN=$token" >> "$HF_TOKEN_FILE"
+                echo -e "${GREEN}✓ Hugging Face token configured successfully${NC}"
+                break
+                ;;
+            2)
+                echo -e "${YELLOW}Skipping token configuration${NC}"
+                break
+                ;;
+            *)
+                echo -e "${RED}Invalid choice. Please enter 1 or 2${NC}"
+                ;;
+        esac
+    done
+}
+
 # Check CUDA availability
 check_cuda() {
     if [ "$CUDA_REQUIRED" = true ]; then
-        if ! command -v nvidia-smi &> /dev/null; then
-            echo -e "${RED}Error: NVIDIA GPU driver not found${NC}"
-            echo "Please install NVIDIA drivers and CUDA toolkit"
-            exit 1
+        if ! command -v nvcc &> /dev/null; then
+            echo -e "${YELLOW}Warning: CUDA not found. GPU acceleration will not be available.${NC}"
+            echo -e "If you want to use GPU acceleration, please install CUDA toolkit."
+            read -p "Continue without GPU support? [y/N] " response
+            if [[ ! "$response" =~ ^[Yy]$ ]]; then
+                echo -e "${YELLOW}Installation aborted by user${NC}"
+                exit 0
+            fi
+        else
+            CUDA_VERSION=$(nvcc --version | grep "release" | awk '{print $6}' | cut -c2-)
+            echo -e "${GREEN}✓ Found CUDA version $CUDA_VERSION${NC}"
         fi
-        
-        if ! nvidia-smi &> /dev/null; then
-            echo -e "${RED}Error: Unable to communicate with NVIDIA GPU${NC}"
-            echo "Please check your GPU installation"
-            exit 1
-        fi
-        
-        echo -e "${GREEN}✓ NVIDIA GPU detected${NC}"
     fi
 }
 
@@ -109,6 +163,9 @@ echo -e "\n${BLUE}Upgrading pip...${NC}"
 pip install --upgrade pip
 check_status "Pip upgrade"
 
+# Setup Hugging Face token
+setup_huggingface_token
+
 # Install Python dependencies
 echo -e "\n${BLUE}Installing Python dependencies...${NC}"
 pip install -r requirements.txt
@@ -132,35 +189,26 @@ check_status "Node.js dependencies installation"
 # Create .env file and handle HuggingFace token
 cd ..
 if [ ! -f ".env" ]; then
-    echo -e "\n${BLUE}Setting up environment configuration...${NC}"
     cp .env.example .env
-    
     echo -e "\n${BLUE}Do you have a HuggingFace account and token? (y/n)${NC}"
     read -r has_token
     
-    if [[ $has_token =~ ^[Nn]$ ]]; then
+    if [ "$has_token" != "y" ]; then
         echo -e "\n${YELLOW}To use this application, you'll need a HuggingFace account and token:${NC}"
-        echo -e "1. Go to ${GREEN}https://huggingface.co/join${NC} to create an account"
+        echo -e "1. Sign up at ${GREEN}https://huggingface.co/join${NC}"
         echo -e "2. After signing up, visit ${GREEN}https://huggingface.co/settings/tokens${NC} to create a token"
-        echo -e "3. Once you have your token, edit the ${YELLOW}.env${NC} file and set HUGGING_FACE_TOKEN=your_token"
-        echo -e "\n${RED}Installation paused: Please add your token to .env and run ./install.sh again${NC}"
-        exit 1
+        echo -e "3. Once you have your token, edit the ${YELLOW}.env${NC} file and set HUGGING_FACE_HUB_TOKEN=your_token"
     else
         echo -e "\n${BLUE}Please enter your HuggingFace token:${NC}"
         read -r token
         if [ -n "$token" ]; then
-            sed -i "s/HUGGING_FACE_TOKEN=/HUGGING_FACE_TOKEN=$token/" .env
-            echo -e "${GREEN}✓ Token added to .env file${NC}"
-        else
-            echo -e "${YELLOW}No token provided. Please edit the .env file later and add your token${NC}"
-            echo -e "\n${RED}Installation paused: Please add your token to .env and run ./install.sh again${NC}"
-            exit 1
+            sed -i "s/HUGGING_FACE_HUB_TOKEN=.*/HUGGING_FACE_HUB_TOKEN=$token/" .env
         fi
     fi
 fi
 
-# Download models
-if [ -f ".env" ] && grep -q "HUGGING_FACE_TOKEN=.*[^[:space:]]" .env; then
+# Check if token exists before downloading models
+if [ -f ".env" ] && grep -q "HUGGING_FACE_HUB_TOKEN=.*[^[:space:]]" .env; then
     echo -e "\n${BLUE}Downloading language models...${NC}"
     python3 install_models.py
     check_status "Model download"

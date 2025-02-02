@@ -76,6 +76,10 @@ def test_performance_metrics():
     assert "ram_usage_mb" in resource_metrics
     assert "ram_percent" in resource_metrics
     
+    # GPU metrics are optional and may not be available
+    if "gpu_utilization" in resource_metrics:
+        assert isinstance(resource_metrics["gpu_utilization"], (int, float))
+    
     # Test inference time logging
     inference_metrics = metrics.log_inference_time(
         model_id="test-model",

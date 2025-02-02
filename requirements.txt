@@ -12,6 +12,7 @@ accelerate==0.25.0
 torch==2.2.0
 fire==0.5.0
 tenacity==8.2.3
+pynvml==11.5.0
 
 # Optional dependencies for better performance
 ninja==1.11.1

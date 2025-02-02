@@ -72,21 +72,20 @@ class PerformanceMetrics:
         self.logger = logging.getLogger("performance")
         
     def log_resource_usage(self) -> Dict[str, Any]:
-        """Log current resource usage."""
+        """Log system resource usage."""
         metrics = {
-            "cpu_percent": self.process.cpu_percent(),
-            "ram_usage_mb": self.process.memory_info().rss / 1024 / 1024,
-            "ram_percent": psutil.virtual_memory().percent
+            "cpu_percent": psutil.cpu_percent(),
+            "ram_usage_mb": psutil.virtual_memory().used / 1024 / 1024,
+            "ram_percent": psutil.virtual_memory().percent,
         }
-        
-        # Add GPU metrics if available
-        if torch.cuda.is_available():
-            metrics.update({
-                "gpu_memory_allocated_mb": torch.cuda.memory_allocated() / 1024 / 1024,
-                "gpu_memory_cached_mb": torch.cuda.memory_reserved() / 1024 / 1024,
-                "gpu_utilization": torch.cuda.utilization()
-            })
-            
+
+        # Only add GPU metrics if CUDA is available and pynvml is installed
+        try:
+            if torch.cuda.is_available():
+                metrics["gpu_utilization"] = torch.cuda.utilization()
+        except (ImportError, AttributeError):
+            pass  # GPU metrics not available
+
         self.logger.info("Resource usage metrics", extra={"metrics": metrics})
         return metrics
         

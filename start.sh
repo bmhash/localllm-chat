@@ -90,16 +90,16 @@ source "$VENV_PATH/bin/activate" || {
     exit 1
 }
 
-# Check if .env exists and has HF token
-if [ ! -f .env ]; then
-    echo -e "${RED}Error: .env file not found${NC}"
+# Check for .env file
+if [ ! -f ".env" ]; then
     echo "Please copy .env.example to .env and add your Hugging Face token"
     exit 1
 fi
 
-if ! grep -q "HUGGING_FACE_TOKEN" .env || grep -q "HUGGING_FACE_TOKEN=your_token_here" .env; then
+# Check for Hugging Face token
+if ! grep -q "HUGGING_FACE_HUB_TOKEN" .env || grep -q "HUGGING_FACE_HUB_TOKEN=your_token_here" .env; then
     echo -e "${RED}Error: Hugging Face token not set in .env${NC}"
-    echo "Please add your token to .env file"
+    echo -e "Please set your token in .env file"
     exit 1
 fi
 
