@@ -16,6 +16,7 @@ import sys
 import hashlib
 import requests
 import shutil
+import argparse
 from pathlib import Path
 from typing import Optional, Dict, Any
 from tqdm import tqdm
@@ -47,6 +48,11 @@ setup_logging(
     json_output=os.getenv("JSON_LOGGING", "true").lower() == "true",
     log_file="install.log"
 )
+
+# Environment configuration
+REQUIRE_CHECKSUMS = os.getenv("REQUIRE_CHECKSUMS", "false").lower() == "true"
+DEFAULT_CACHE_DIR = os.path.expanduser("~/.cache/huggingface")
+CACHE_DIR = Path(os.getenv("HUGGINGFACE_HUB_CACHE", DEFAULT_CACHE_DIR))
 
 import logging
 logger = logging.getLogger(__name__)
@@ -232,11 +238,11 @@ def download_model(model_id: str, force: bool = False) -> bool:
     config = get_model_config(model_id)
     logger.info(f"Preparing to download {config['name']}")
     
-    # Check disk space
-    if not check_disk_space(config["size_gb"]):
+    # Check disk space at cache directory
+    if not check_disk_space(config["size_gb"], str(CACHE_DIR)):
         logger.error(
             "Insufficient disk space",
-            extra={"required_gb": config["size_gb"]}
+            extra={"required_gb": config["size_gb"], "cache_dir": str(CACHE_DIR)}
         )
         return False
     
@@ -244,21 +250,47 @@ def download_model(model_id: str, force: bool = False) -> bool:
         # Check and request model access if needed
         if not check_model_access(config["model_id"]):
             logger.info(f"Model {config['name']} requires access request")
-            if not request_model_access(config["model_id"]):
-                logger.error(f"Failed to request access to {config['name']}")
+            
+            # Try to request access
+            request_result = request_model_access(config["model_id"])
+            if not request_result:
+                logger.error(
+                    f"Failed to request access to {config['name']}",
+                    extra={
+                        "model_id": model_id,
+                        "error_type": "request_failed"
+                    }
+                )
                 return False
                 
             # Wait for access to be granted
-            if not wait_for_model_access(config["model_id"]):
-                logger.error(f"Access not granted to {config['name']}")
+            wait_result = wait_for_model_access(config["model_id"])
+            if not wait_result:
+                logger.error(
+                    f"Access not granted to {config['name']}",
+                    extra={
+                        "model_id": model_id,
+                        "error_type": "access_timeout"
+                    }
+                )
+                return False
+            
+            # Double check access was actually granted
+            if not check_model_access(config["model_id"]):
+                logger.error(
+                    f"Access verification failed for {config['name']}",
+                    extra={
+                        "model_id": model_id,
+                        "error_type": "access_verification_failed"
+                    }
+                )
                 return False
         
         # Get model files
         files = get_model_files(config["model_id"])
         
         # Create cache directory
-        cache_dir = Path(".cache/huggingface")
-        cache_dir.mkdir(parents=True, exist_ok=True)
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
         
         # Get checksums if available
         checksums = {}
@@ -273,15 +305,24 @@ def download_model(model_id: str, force: bool = False) -> bool:
                     if len(line.split()) >= 2
                 }
             except Exception as e:
-                logger.warning(
-                    "Failed to fetch checksums",
-                    extra={"error": str(e), "url": config["checksum_url"]}
-                )
+                msg = "Failed to fetch checksums"
+                if REQUIRE_CHECKSUMS:
+                    logger.error(
+                        msg,
+                        extra={"error": str(e), "url": config["checksum_url"]},
+                        exc_info=True
+                    )
+                    return False
+                else:
+                    logger.warning(
+                        msg,
+                        extra={"error": str(e), "url": config["checksum_url"]}
+                    )
         
         # Download and verify each file
         success = True
         for file in files["files"]:
-            file_path = cache_dir / file.rfilename
+            file_path = CACHE_DIR / file.rfilename
             expected_size = file.size if file.size is not None else None
             expected_md5 = checksums.get(file.rfilename)
             
@@ -372,6 +413,12 @@ def download_model(model_id: str, force: bool = False) -> bool:
 
 def main():
     """Main entry point for model installation."""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Install models from HuggingFace")
+    parser.add_argument("--force", action="store_true", help="Force re-download of models")
+    parser.add_argument("--model", help="Specific model to download. If not specified, downloads all models.")
+    args = parser.parse_args()
+
     # Check for HuggingFace token
     token = os.getenv("HUGGING_FACE_HUB_TOKEN")
     if not token:
@@ -393,22 +440,31 @@ def main():
     total_gb = get_total_required_space()
     
     # Check total disk space
-    if not check_disk_space(total_gb):
+    if not check_disk_space(total_gb, str(CACHE_DIR)):
         logger.error(
             "Insufficient disk space for all models",
-            extra={"required_gb": total_gb}
+            extra={"required_gb": total_gb, "cache_dir": str(CACHE_DIR)}
         )
         sys.exit(1)
     
-    # Download each model
+    # Track overall success
     success = True
-    for model_id in MODELS_CONFIG:
-        if not download_model(model_id):
-            success = False
-            logger.error(f"Failed to download {model_id}")
+    
+    # Download specific model or all models
+    if args.model:
+        if not validate_model_id(args.model):
+            logger.error(f"Invalid model ID: {args.model}")
+            sys.exit(1)
+        success = download_model(args.model, force=args.force)
+    else:
+        # Download all models
+        for model_id in MODELS_CONFIG:
+            model_success = download_model(model_id, force=args.force)
+            success &= model_success
+            if not model_success:
+                logger.error(f"Failed to download {model_id}")
     
     if not success:
-        logger.error("Some models failed to download")
         sys.exit(1)
         
     logger.info("All models downloaded successfully")
