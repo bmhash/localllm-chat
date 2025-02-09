@@ -12,6 +12,7 @@ A modern, efficient, and privacy-focused chat interface for running Large Langua
 - 🔄 Real-time streaming responses
 - 📱 Responsive design for all devices
 - 🤗 Easy model management with HuggingFace integration
+- 🔐 Gated model access support for controlled deployment
 
 ## Prerequisites
 
@@ -24,8 +25,8 @@ A modern, efficient, and privacy-focused chat interface for running Large Langua
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/bmhash/localllm-chat-interface.git
-cd localllm-chat-interface
+git clone https://github.com/bmhash/localllm-chat.git
+cd localllm-chat
 ```
 
 2. Run the installation script:
@@ -75,8 +76,15 @@ Models are loaded on demand to optimize memory usage. The first request for each
 ├── server.py           # FastAPI backend server
 ├── install.sh          # Installation script
 ├── start.sh           # Startup script
+├── install_models.py  # Model installation and management
+├── config/           # Configuration files
+│   └── models.py     # Model definitions and settings
+├── chat_formatting.py # Chat message formatting utilities
 ├── requirements.txt   # Python dependencies
 ├── chat-interface/    # Next.js frontend
+│   ├── src/
+│   │   └── components/
+│   │       └── ChatInterface.tsx  # Main chat component
 └── README.md         # This file
 ```
 
@@ -90,9 +98,20 @@ npm run dev
 
 To run the backend in development mode:
 ```bash
-source ../llama_env/bin/activate
+source .venv/bin/activate  # or your virtual environment path
 python server.py
 ```
+
+## Dependencies
+
+Key dependencies include:
+- FastAPI 0.109.0
+- PyTorch 2.2.1+cu118
+- Transformers 4.36.2
+- Next.js (latest)
+- Python 3.12+
+
+For a complete list of Python dependencies, see `requirements.txt`.
 
 ## Privacy & Security
 
