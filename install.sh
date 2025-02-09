@@ -51,7 +51,9 @@ version_greater_equal() {
 setup_huggingface_token() {
     if [ ! -f "$HF_TOKEN_FILE" ]; then
         echo -e "\n${YELLOW}Hugging Face token not found${NC}"
-        read -p "Enter your Hugging Face token (or press enter to skip): " token
+        echo -e "Enter your Hugging Face token (or press enter to skip): "
+        read -s token
+        echo  # Add a newline after hidden input
         if [ ! -z "$token" ]; then
             echo "HUGGING_FACE_HUB_TOKEN=$token" > "$HF_TOKEN_FILE"
             echo -e "${GREEN}Token saved to $HF_TOKEN_FILE${NC}"
