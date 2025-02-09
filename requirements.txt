@@ -1,29 +1,33 @@
-# Base requirements
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-python-dotenv==1.0.0
-transformers==4.36.2
-numpy==1.26.3
-typing_extensions==4.9.0
-pydantic==2.5.3
-bitsandbytes==0.41.3
-sentencepiece==0.1.99
-accelerate==0.25.0
-torch==2.2.0
-fire==0.5.0
-tenacity==8.2.3
-pynvml==11.5.0
+# Build dependencies
+setuptools>=68.2.2
 
-# Optional dependencies for better performance
-ninja==1.11.1
+# Core ML dependencies
+--find-links https://download.pytorch.org/whl/torch_stable.html
+torch==2.2.1+cu118
+numpy==1.26.0
+scipy>=1.11.4
+einops==0.7.0
+
+# Hugging Face ecosystem
+transformers==4.36.2
+tokenizers==0.15.0
+sentencepiece==0.1.99
+huggingface-hub==0.20.3
 safetensors==0.4.1
 protobuf==4.25.2
 
-# Hugging Face
-huggingface_hub>=0.20.3,<1.0.0
+# ML optimization
+accelerate==0.25.0
+bitsandbytes==0.41.1
 
-# Testing dependencies
-pytest==7.4.3
-pytest-asyncio==0.21.1
-pytest-cov==4.1.0
-httpx==0.25.2  # For testing FastAPI
+# FastAPI server
+fastapi==0.109.0
+uvicorn==0.27.0
+uvicorn[standard]
+python-multipart
+pydantic==2.5.3
+
+# Utilities
+psutil==5.9.8
+python-dotenv==1.0.0
+PyYAML==6.0.1

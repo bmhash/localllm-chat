@@ -15,21 +15,33 @@ Fields:
     size_gb (float): Approximate model size in gigabytes
     checksum_url (str): URL for model file MD5 checksums
     trust_remote_code (bool): Whether to trust remote code during model loading
+
+Constants:
+    MAX_LOADED_MODELS (int): Maximum number of models to keep loaded at once
 """
 
 from typing import Dict, Any
+
+# Maximum number of models to keep loaded at once
+MAX_LOADED_MODELS = 2
+
+DEFAULT_MODEL = "llama-3.2-3b"
 
 MODELS_CONFIG: Dict[str, Dict[str, Any]] = {
     "llama-3.2-3b": {
         "name": "Llama 3.2 3B Instruct",
         "model_id": "meta-llama/Llama-3.2-3B-Instruct",
         "context_length": 4096,
-        "temperature": 0.7,
-        "max_new_tokens": 500,
+        "temperature": 0.3,
+        "max_new_tokens": 200,
         "load_in_4bit": True,
         "size_gb": 3,
         "checksum_url": "https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct/raw/main/checksums.md5",
-        "trust_remote_code": False
+        "trust_remote_code": False,
+        "rope_scaling": {
+            "type": "dynamic",
+            "factor": 32.0
+        }
     },
     "deepseek-7b": {
         "name": "Deepseek Coder 7B",
@@ -53,17 +65,6 @@ MODELS_CONFIG: Dict[str, Dict[str, Any]] = {
         "checksum_url": "https://huggingface.co/codellama/CodeLlama-7b-Instruct-hf/raw/main/checksums.md5",
         "trust_remote_code": False
     },
-    "codellama-13b": {
-        "name": "CodeLlama 13B Instruct",
-        "model_id": "codellama/CodeLlama-13b-Instruct-hf",
-        "context_length": 8192,
-        "temperature": 0.7,
-        "max_new_tokens": 4096,
-        "load_in_4bit": True,
-        "size_gb": 13,
-        "checksum_url": "https://huggingface.co/codellama/CodeLlama-13b-Instruct-hf/raw/main/checksums.md5",
-        "trust_remote_code": False
-    },
     "mistral-7b": {
         "name": "Mistral 7B Instruct v0.3",
         "model_id": "mistralai/Mistral-7B-Instruct-v0.3",
@@ -74,44 +75,8 @@ MODELS_CONFIG: Dict[str, Dict[str, Any]] = {
         "size_gb": 7,
         "checksum_url": "https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3/raw/main/checksums.md5",
         "trust_remote_code": False
-    },
-    "deepseek-moe-16b": {
-        "name": "Deepseek MoE 16B",
-        "model_id": "deepseek-ai/deepseek-moe-16b-chat",
-        "context_length": 8192,
-        "temperature": 0.7,
-        "max_new_tokens": 4096,
-        "load_in_4bit": True,
-        "size_gb": 16,
-        "checksum_url": "https://huggingface.co/deepseek-ai/deepseek-moe-16b-chat/raw/main/checksums.md5",
-        "trust_remote_code": True
-    },
-    "phi-2": {
-        "name": "Microsoft Phi-2",
-        "model_id": "microsoft/phi-2",
-        "context_length": 2048,
-        "temperature": 0.7,
-        "max_new_tokens": 1024,
-        "load_in_4bit": True,
-        "size_gb": 2.7,
-        "checksum_url": "https://huggingface.co/microsoft/phi-2/raw/main/checksums.md5",
-        "trust_remote_code": False
-    },
-    "neural-chat-7b": {
-        "name": "Neural Chat 7B",
-        "model_id": "Intel/neural-chat-7b-v3-1",
-        "context_length": 8192,
-        "temperature": 0.7,
-        "max_new_tokens": 4096,
-        "load_in_4bit": True,
-        "size_gb": 7,
-        "checksum_url": "https://huggingface.co/Intel/neural-chat-7b-v3-1/raw/main/checksums.md5",
-        "trust_remote_code": False
     }
 }
-
-# Default model to load at startup
-DEFAULT_MODEL = "llama-3.2-3b"
 
 def get_model_config(model_id: str) -> Dict[str, Any]:
     """

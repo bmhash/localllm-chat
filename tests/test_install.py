@@ -6,11 +6,14 @@ import pytest
 import os
 from pathlib import Path
 import requests
+from unittest.mock import patch, MagicMock
 from install_models import (
     check_disk_space,
     verify_checksum,
-    download_file
+    download_file,
+    get_model_files
 )
+from config.models import MODELS_CONFIG
 
 def test_check_disk_space(tmp_path):
     """Test disk space checking."""
@@ -57,3 +60,14 @@ def test_download_file(tmp_path):
     assert success is True
     assert dest_path.exists()
     assert dest_path.stat().st_size == 1024
+
+def test_model_size_constraints():
+    """Test that all models meet size constraints."""
+    for model_id, config in MODELS_CONFIG.items():
+        # Check model size is within limits
+        assert config["size_gb"] <= 7, f"Model {model_id} exceeds 7GB size limit"
+        
+        # Check total size of loaded models won't exceed memory
+        max_loaded_size = 7 * 2  # MAX_LOADED_MODELS * max size per model
+        assert config["size_gb"] <= max_loaded_size, \
+            f"Model {model_id} too large for concurrent loading"

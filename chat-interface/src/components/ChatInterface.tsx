@@ -55,11 +55,13 @@ const ChatInterface: React.FC = () => {
     // Fetch available models when component mounts
     const fetchModels = async () => {
       try {
-        const response = await fetch('http://localhost:8000/api/models', {
+        const response = await fetch('http://localhost:8000/models', {
           method: 'GET',
           headers: {
             'Accept': 'application/json',
+            'Content-Type': 'application/json',
           },
+          mode: 'cors',
         });
         
         if (!response.ok) {
@@ -67,10 +69,14 @@ const ChatInterface: React.FC = () => {
         }
         
         const data = await response.json();
-        if (Array.isArray(data.models)) {
-          setModels(data.models);
-          if (data.models.length > 0) {
-            setSelectedModel(data.models[0].id);
+        if (data.models) {
+          const modelArray = Object.entries(data.models).map(([id, model]) => ({
+            id,
+            name: (model as any).name
+          }));
+          setModels(modelArray);
+          if (modelArray.length > 0) {
+            setSelectedModel(modelArray[0].id);
           }
         } else {
           console.error('Invalid models data format:', data);
@@ -112,14 +118,14 @@ const ChatInterface: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const response = await fetch('http://localhost:8000/api/chat', {
+      const response = await fetch('http://localhost:8000/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           messages: messages.concat(userMessage),
-          model_name: selectedModel
+          model_id: selectedModel
         }),
       });
 

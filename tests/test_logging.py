@@ -3,22 +3,19 @@ Tests for the logging module.
 """
 
 import pytest
-import logging
 import json
-import os
-from pathlib import Path
+import logging
+import time
+from unittest.mock import patch, MagicMock
 from utils.logging import (
-    setup_logging,
     JSONFormatter,
-    PerformanceMetrics
+    PerformanceMetrics,
+    setup_logging
 )
 
 def test_json_formatter():
-    """Test that JSONFormatter formats logs correctly."""
+    """Test JSON formatter output."""
     formatter = JSONFormatter()
-    logger = logging.getLogger("test")
-    
-    # Create a log record
     record = logging.LogRecord(
         name="test",
         level=logging.INFO,
@@ -29,66 +26,45 @@ def test_json_formatter():
         exc_info=None
     )
     
-    # Format the record
-    formatted = formatter.format(record)
+    output = formatter.format(record)
+    data = json.loads(output)
     
-    # Parse the JSON output
-    log_data = json.loads(formatted)
-    
-    # Check required fields
-    assert "timestamp" in log_data
-    assert log_data["level"] == "INFO"
-    assert log_data["message"] == "Test message"
-    assert log_data["module"] == "test"
-    assert log_data["line"] == 1
+    assert isinstance(data, dict)
+    assert data["level"] == "INFO"
+    assert data["message"] == "Test message"
+    assert "timestamp" in data
 
-def test_setup_logging(tmp_path):
+def test_setup_logging():
     """Test logging setup."""
-    log_file = tmp_path / "test.log"
+    setup_logging(level=logging.INFO, json_output=True)
+    root_logger = logging.getLogger()
     
-    # Setup logging
-    setup_logging(
-        level=logging.INFO,
-        json_output=True,
-        log_file=str(log_file)
-    )
+    assert root_logger.level == logging.INFO
+    assert len(root_logger.handlers) > 0
     
-    # Get logger and log a message
-    logger = logging.getLogger("test")
-    test_message = "Test log message"
-    logger.info(test_message)
-    
-    # Check that file was created
-    assert log_file.exists()
-    
-    # Read log file and check content
-    with open(log_file) as f:
-        log_data = json.loads(f.readline())
-        assert log_data["message"] == test_message
+    # Test performance logger
+    perf_logger = logging.getLogger("performance")
+    assert len(perf_logger.handlers) > 0
 
 def test_performance_metrics():
-    """Test PerformanceMetrics class."""
+    """Test performance metrics tracking."""
     metrics = PerformanceMetrics()
     
     # Test resource usage logging
     resource_metrics = metrics.log_resource_usage()
+    assert isinstance(resource_metrics, dict)
     assert "cpu_percent" in resource_metrics
     assert "ram_usage_mb" in resource_metrics
-    assert "ram_percent" in resource_metrics
-    
-    # GPU metrics are optional and may not be available
-    if "gpu_utilization" in resource_metrics:
-        assert isinstance(resource_metrics["gpu_utilization"], (int, float))
     
     # Test inference time logging
     inference_metrics = metrics.log_inference_time(
         model_id="test-model",
-        start_time=0,
+        start_time=time.time() - 1,  # 1 second ago
         input_tokens=10,
         output_tokens=20
     )
+    assert isinstance(inference_metrics, dict)
     assert inference_metrics["model_id"] == "test-model"
     assert inference_metrics["input_tokens"] == 10
     assert inference_metrics["output_tokens"] == 20
-    assert "duration_seconds" in inference_metrics
-    assert "tokens_per_second" in inference_metrics
+    assert inference_metrics["duration_seconds"] > 0

@@ -7,11 +7,13 @@ import pytest
 from unittest.mock import patch, MagicMock
 from huggingface_hub.utils import HfHubHTTPError
 import requests
+import torch
 
 from utils.model_access import check_model_access, request_model_access, wait_for_model_access
+from config.models import MODELS_CONFIG
 
 # Test data
-TEST_MODEL_ID = "deepseek-7b"
+TEST_MODEL_ID = "llama-3.2-3b"  # Updated to use a model we actually have
 TEST_TOKEN = "dummy_token"
 
 @pytest.fixture

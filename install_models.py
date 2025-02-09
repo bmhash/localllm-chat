@@ -138,9 +138,22 @@ def download_file(
     Returns:
         Boolean indicating success
     """
+    # Get Hugging Face token
+    token = os.getenv("HUGGING_FACE_HUB_TOKEN")
+    if not token:
+        try:
+            with open(os.path.expanduser("~/.cache/huggingface/token"), "r") as f:
+                token = f.read().strip()
+        except:
+            pass
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    
+    # Create parent directories if they don't exist
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    
     for attempt in range(max_retries):
         try:
-            response = requests.get(url, stream=True)
+            response = requests.get(url, stream=True, headers=headers)
             response.raise_for_status()
             
             # Get content length, default to 0 if not provided
@@ -219,6 +232,38 @@ def verify_checksum(file_path: Path, expected_md5: str) -> bool:
     )
     
     return actual_md5 == expected_md5
+
+def check_model_files(model_key: str) -> bool:
+    """
+    Check if all model files are present.
+    
+    Args:
+        model_key: Key in MODELS_CONFIG for the model to check
+        
+    Returns:
+        Boolean indicating if all files are present
+    """
+    try:
+        config = get_model_config(model_key)
+        files = get_model_files(config["model_id"])
+        
+        # Check each file exists
+        for file in files["files"]:
+            file_path = CACHE_DIR / file.rfilename
+            if not file_path.exists():
+                return False
+                
+        return True
+        
+    except Exception as e:
+        logger.warning(
+            f"Failed to check model files",
+            extra={
+                "error": str(e),
+                "model_key": model_key
+            }
+        )
+        return False
 
 def download_model(model_id: str, force: bool = False) -> bool:
     """
@@ -419,8 +464,19 @@ def main():
     parser.add_argument("--model", help="Specific model to download. If not specified, downloads all models.")
     args = parser.parse_args()
 
+    # Unset HF_TOKEN to ensure HUGGING_FACE_HUB_TOKEN is used
+    if "HF_TOKEN" in os.environ:
+        logger.warning("HF_TOKEN is set, unsetting it to use HUGGING_FACE_HUB_TOKEN instead")
+        del os.environ["HF_TOKEN"]
+
     # Check for HuggingFace token
     token = os.getenv("HUGGING_FACE_HUB_TOKEN")
+    if not token:
+        try:
+            with open(os.path.expanduser("~/.cache/huggingface/token"), "r") as f:
+                token = f.read().strip()
+        except:
+            pass
     if not token:
         logger.error("HUGGING_FACE_HUB_TOKEN not set in environment")
         sys.exit(1)

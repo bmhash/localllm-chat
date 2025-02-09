@@ -49,89 +49,29 @@ version_greater_equal() {
 
 # Function to handle Hugging Face token
 setup_huggingface_token() {
-    local HF_TOKEN_FILE=".env"
-    local token
-    
-    if [ -f "$HF_TOKEN_FILE" ] && grep -q "HUGGING_FACE_HUB_TOKEN=" "$HF_TOKEN_FILE"; then
-        echo -e "${GREEN}Hugging Face token already configured${NC}"
-        return 0
+    if [ ! -f "$HF_TOKEN_FILE" ]; then
+        echo -e "\n${YELLOW}Hugging Face token not found${NC}"
+        read -p "Enter your Hugging Face token (or press enter to skip): " token
+        if [ ! -z "$token" ]; then
+            echo "HUGGING_FACE_HUB_TOKEN=$token" > "$HF_TOKEN_FILE"
+            echo -e "${GREEN}Token saved to $HF_TOKEN_FILE${NC}"
+        else
+            echo -e "${YELLOW}No token provided. You may need to set HUGGING_FACE_HUB_TOKEN manually later.${NC}"
+        fi
+    else
+        echo -e "${GREEN}Found existing Hugging Face token${NC}"
     fi
-    
-    echo -e "${YELLOW}A Hugging Face account and API token are required to download models.${NC}"
-    echo -e "1. Create an account at ${BLUE}https://huggingface.co/join${NC}"
-    echo -e "2. Go to ${BLUE}https://huggingface.co/settings/tokens${NC} to create an API token"
-    echo -e "\nPlease choose:"
-    echo -e "1) Enter your Hugging Face API token"
-    echo -e "2) Skip for now (you won't be able to download models)"
-    
-    while true; do
-        read -p "Enter your choice (1/2): " choice
-        case $choice in
-            1)
-                read -sp "Please paste your Hugging Face API token: " token
-                echo
-                
-                # Validate token is not empty
-                if [ -z "$token" ]; then
-                    echo -e "${RED}Error: Token cannot be empty${NC}"
-                    continue
-                fi
-                
-                # Create .env file if it doesn't exist
-                if [ ! -f "$HF_TOKEN_FILE" ]; then
-                    cp .env.example "$HF_TOKEN_FILE"
-                fi
-                
-                # Remove any existing token line
-                sed -i '/HUGGING_FACE_HUB_TOKEN=/d' "$HF_TOKEN_FILE"
-                
-                # Add new token
-                echo "HUGGING_FACE_HUB_TOKEN=$token" >> "$HF_TOKEN_FILE"
-                echo -e "${GREEN}✓ Hugging Face token configured successfully${NC}"
-                
-                # Install huggingface_hub if not already installed
-                echo -e "\n${BLUE}Installing Hugging Face Hub...${NC}"
-                if ! python3 -m pip install --quiet huggingface_hub; then
-                    echo -e "${RED}Error: Failed to install huggingface_hub${NC}"
-                    return 1
-                fi
-                
-                # Login to Hugging Face Hub
-                echo -e "\n${BLUE}Logging in to Hugging Face Hub...${NC}"
-                source "$HF_TOKEN_FILE"
-                if ! python3 -c "from huggingface_hub import login; login(token='$token', write_permission=False)"; then
-                    echo -e "${RED}Error: Failed to login to Hugging Face Hub${NC}"
-                    return 1
-                fi
-                echo -e "${GREEN}✓ Successfully logged in to Hugging Face Hub${NC}"
-                break
-                ;;
-            2)
-                echo -e "${YELLOW}Skipping token configuration${NC}"
-                break
-                ;;
-            *)
-                echo -e "${RED}Invalid choice. Please enter 1 or 2${NC}"
-                ;;
-        esac
-    done
 }
 
-# Check CUDA availability
+# Function to check CUDA
 check_cuda() {
     if [ "$CUDA_REQUIRED" = true ]; then
-        if ! command -v nvcc &> /dev/null; then
-            echo -e "${YELLOW}Warning: CUDA not found. GPU acceleration will not be available.${NC}"
-            echo -e "If you want to use GPU acceleration, please install CUDA toolkit."
-            read -p "Continue without GPU support? [y/N] " response
-            if [[ ! "$response" =~ ^[Yy]$ ]]; then
-                echo -e "${YELLOW}Installation aborted by user${NC}"
-                exit 0
-            fi
-        else
-            CUDA_VERSION=$(nvcc --version | grep "release" | awk '{print $6}' | cut -c2-)
-            echo -e "${GREEN}✓ Found CUDA version $CUDA_VERSION${NC}"
+        if ! command -v nvidia-smi &> /dev/null; then
+            echo -e "${RED}Error: CUDA not found${NC}"
+            echo "Please install CUDA and ensure nvidia-smi is available"
+            exit 1
         fi
+        echo -e "${GREEN}✓ CUDA is available${NC}"
     fi
 }
 
@@ -139,10 +79,12 @@ check_cuda() {
 echo -e "\n${BLUE}Checking system requirements...${NC}"
 check_command python3
 check_command pip3
-check_command node
 check_command npm
-check_command git
-check_cuda
+
+# Check if safetensors is installed
+if ! python3 -c "import safetensors" &> /dev/null; then
+    echo -e "${YELLOW}Warning: safetensors not found, will be installed${NC}"
+fi
 
 # Check Python version
 PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
@@ -160,72 +102,36 @@ if ! version_greater_equal "$NODE_VERSION" "$NODE_MIN_VERSION"; then
 fi
 echo -e "${GREEN}✓ Node.js version $NODE_VERSION${NC}"
 
-# Create virtual environment if it doesn't exist
-echo -e "\n${BLUE}Setting up Python virtual environment...${NC}"
-if [ ! -d "$VENV_PATH" ]; then
-    echo "Creating new virtual environment at $VENV_PATH"
-    python3 -m venv "$VENV_PATH"
-    check_status "Virtual environment creation"
-else
-    echo -e "${YELLOW}Virtual environment already exists at $VENV_PATH${NC}"
-fi
+# Check CUDA
+check_cuda
 
-# Activate virtual environment
+# Create and activate virtual environment
+echo -e "\n${BLUE}Setting up Python virtual environment...${NC}"
+if [ -d "$VENV_PATH" ]; then
+    echo -e "${YELLOW}Found existing virtual environment, recreating...${NC}"
+    rm -rf "$VENV_PATH"
+fi
+python3 -m venv "$VENV_PATH"
 source "$VENV_PATH/bin/activate"
-check_status "Virtual environment activation"
+check_status "Virtual environment creation"
 
 # Upgrade pip
 echo -e "\n${BLUE}Upgrading pip...${NC}"
 pip install --upgrade pip
-check_status "Pip upgrade"
-
-# Setup Hugging Face token
-setup_huggingface_token
+check_status "pip upgrade"
 
 # Install Python dependencies
 echo -e "\n${BLUE}Installing Python dependencies...${NC}"
 pip install -r requirements.txt
 check_status "Python dependencies installation"
 
-# Set up frontend
-echo -e "\n${BLUE}Setting up frontend...${NC}"
-cd chat-interface || {
-    echo -e "${RED}Error: chat-interface directory not found${NC}"
-    exit 1
-}
-
-# Install Node.js dependencies
-echo "Installing Node.js dependencies..."
-if [ -d "node_modules" ]; then
-    echo -e "${YELLOW}Node modules already exist, running npm install to update...${NC}"
-fi
-npm install
-check_status "Node.js dependencies installation"
-
-# Create .env file and handle HuggingFace token
-cd ..
-if [ ! -f ".env" ]; then
-    cp .env.example .env
-    echo -e "\n${BLUE}Do you have a HuggingFace account and token? (y/n)${NC}"
-    read -r has_token
-    
-    if [ "$has_token" != "y" ]; then
-        echo -e "\n${YELLOW}To use this application, you'll need a HuggingFace account and token:${NC}"
-        echo -e "1. Sign up at ${GREEN}https://huggingface.co/join${NC}"
-        echo -e "2. After signing up, visit ${GREEN}https://huggingface.co/settings/tokens${NC} to create a token"
-        echo -e "3. Once you have your token, edit the ${YELLOW}.env${NC} file and set HUGGING_FACE_HUB_TOKEN=your_token"
-    else
-        echo -e "\n${BLUE}Please enter your HuggingFace token:${NC}"
-        read -r token
-        if [ -n "$token" ]; then
-            sed -i "s/HUGGING_FACE_HUB_TOKEN=.*/HUGGING_FACE_HUB_TOKEN=$token/" .env
-        fi
-    fi
-fi
+# Setup Hugging Face token
+setup_huggingface_token
 
 # Check if token exists before downloading models
 if [ -f ".env" ] && grep -q "HUGGING_FACE_HUB_TOKEN=.*[^[:space:]]" .env; then
     echo -e "\n${BLUE}Downloading language models...${NC}"
+    source .env
     python3 install_models.py
     check_status "Model download"
 else
@@ -233,7 +139,11 @@ else
     exit 1
 fi
 
+# Install frontend dependencies
+echo -e "\n${BLUE}Installing frontend dependencies...${NC}"
+cd "$SCRIPT_DIR/chat-interface"
+npm install
+check_status "Frontend dependencies installation"
+
 echo -e "\n${GREEN}Installation completed successfully!${NC}"
-echo -e "${BLUE}Next steps:${NC}"
-echo -e "1. Run ${YELLOW}./start.sh${NC} to start the application"
-echo -e "2. Open ${YELLOW}http://localhost:3000${NC} in your browser\n"
+echo -e "You can now run ${BLUE}./start.sh${NC} to start the application"

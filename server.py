@@ -16,13 +16,14 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 import torch
 import os
 import psutil
 import shutil
 from pathlib import Path
 import time
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig, BitsAndBytesConfig
 from config.models import (
     MODELS_CONFIG,
     DEFAULT_MODEL,
@@ -30,6 +31,11 @@ from config.models import (
     validate_model_id
 )
 from utils.logging import setup_logging, metrics
+import logging
+from chat_formatting import format_chat_messages
+
+# Constants
+MAX_LOADED_MODELS = 2
 
 # Set up logging
 setup_logging(
@@ -38,7 +44,6 @@ setup_logging(
     log_file="server.log"
 )
 
-import logging
 logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
@@ -49,8 +54,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],  # Frontend URL
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"]
 )
 
 # Disable Flash Attention warnings
@@ -60,12 +65,6 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 # Global cache for loaded models and tokenizers
 loaded_models: Dict[str, Any] = {}
 loaded_tokenizers: Dict[str, Any] = {}
-
-from transformers import (
-    AutoModelForCausalLM, 
-    AutoTokenizer,
-    BitsAndBytesConfig
-)
 
 class ChatMessage(BaseModel):
     """
@@ -118,7 +117,7 @@ def check_system_resources() -> Dict[str, Any]:
     
     return resources
 
-def load_model(model_id: str, background_tasks: BackgroundTasks):
+def load_model(model_id: str, background_tasks: BackgroundTasks) -> Tuple[Any, Any]:
     """
     Load a model and its tokenizer if not already loaded.
     
@@ -133,68 +132,91 @@ def load_model(model_id: str, background_tasks: BackgroundTasks):
         ValueError: If model_id is invalid
         RuntimeError: If system resources are insufficient
     """
-    if not validate_model_id(model_id):
-        raise ValueError(f"Invalid model ID: {model_id}")
-        
-    if model_id not in loaded_models:
-        logger.info(f"Loading model {model_id}")
+    try:
+        # Validate model ID
+        if not validate_model_id(model_id):
+            raise ValueError(f"Invalid model ID: {model_id}")
+            
+        # Get model config
         config = get_model_config(model_id)
         
         # Check system resources
-        resources = check_system_resources()
-        required_memory = config["size_gb"]
-        if torch.cuda.is_available():
-            available_memory = (
-                torch.cuda.get_device_properties(0).total_memory / (1024**3)
-                - resources["gpu_memory_allocated_gb"]
-            )
-            if available_memory < required_memory:
-                raise RuntimeError(f"Insufficient GPU memory. Need {required_memory}GB, have {available_memory}GB available")
+        check_system_resources()
         
-        # Load tokenizer if not already loaded
+        # Return cached model if available
+        if model_id in loaded_models:
+            return loaded_models[model_id], loaded_tokenizers[model_id]
+            
+        # Clean up unused models
+        if len(loaded_models) >= MAX_LOADED_MODELS:
+            cleanup_unused_models()
+            background_tasks.add_task(cleanup_unused_models)
+            
+        # Load tokenizer if not cached
         if model_id not in loaded_tokenizers:
             logger.info("Loading tokenizer")
             tokenizer = AutoTokenizer.from_pretrained(
                 config["model_id"],
-                trust_remote_code=config.get("trust_remote_code", False)
+                token=os.getenv("HUGGING_FACE_HUB_TOKEN")
             )
+            
+            # Ensure tokenizer has required special tokens
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+                
             loaded_tokenizers[model_id] = tokenizer
             
         # Configure quantization
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=config["load_in_4bit"],
-            bnb_4bit_compute_dtype=torch.float16,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True
+            bnb_4bit_compute_dtype=torch.float16
         )
         
         # Load model
+        logger.info("Loading model")
         start_time = time.time()
+        
+        # Get base config first
+        base_config = AutoConfig.from_pretrained(
+            config["model_id"],
+            token=os.getenv("HUGGING_FACE_HUB_TOKEN"),
+            use_safetensors=True,
+            trust_remote_code=config["trust_remote_code"]
+        )
+        
+        # Load model with config
         model = AutoModelForCausalLM.from_pretrained(
             config["model_id"],
-            device_map="auto",
+            token=os.getenv("HUGGING_FACE_HUB_TOKEN"),
+            torch_dtype=torch.float16,
             quantization_config=bnb_config,
-            trust_remote_code=config.get("trust_remote_code", False)
+            trust_remote_code=config["trust_remote_code"],
+            device_map="auto",
+            config=base_config,
+            use_safetensors=True
         )
+        
+        load_time = time.time() - start_time
         loaded_models[model_id] = model
         
-        # Log loading metrics
-        load_time = time.time() - start_time
+        # Log model load time
         logger.info(
             f"Model {model_id} loaded",
             extra={
-                "metrics": {
-                    "model_id": model_id,
-                    "load_time_seconds": load_time,
-                    "memory_allocated_gb": torch.cuda.memory_allocated() / (1024**3)
-                }
+                "load_time": load_time,
+                "model_id": model_id
             }
         )
         
-        # Schedule cleanup of unused models
-        background_tasks.add_task(cleanup_unused_models)
+        return model, loaded_tokenizers[model_id]
         
-    return loaded_models[model_id], loaded_tokenizers[model_id]
+    except Exception as e:
+        logger.error(
+            f"Failed to load model {model_id}",
+            extra={"error": str(e)},
+            exc_info=True
+        )
+        raise
 
 def cleanup_unused_models():
     """
@@ -217,35 +239,6 @@ def cleanup_unused_models():
                 del loaded_tokenizers[model_id]
             torch.cuda.empty_cache()
 
-def format_messages(messages: List[ChatMessage], model_id: str) -> List[Dict[str, str]]:
-    """
-    Format messages for the model while preserving context.
-    
-    Args:
-        messages: List of chat messages
-        model_id: ID of the model being used
-        
-    Returns:
-        List of formatted messages
-    """
-    formatted_messages = []
-    
-    # Add system message
-    system_msg = {
-        "role": "system",
-        "content": "You are a helpful AI assistant."
-    }
-    formatted_messages.append(system_msg)
-    
-    # Add conversation history
-    for msg in messages:
-        formatted_messages.append({
-            "role": msg.role,
-            "content": msg.content
-        })
-        
-    return formatted_messages
-
 async def generate_response(
     messages: List[ChatMessage],
     model: Any,
@@ -253,74 +246,42 @@ async def generate_response(
     model_id: str,
     max_new_tokens: Optional[int] = None
 ) -> str:
-    """
-    Generate response from model.
-    
-    Args:
-        messages: List of chat messages
-        model: The loaded model
-        tokenizer: The loaded tokenizer
-        model_id: ID of the model being used
-        max_new_tokens: Maximum number of tokens to generate
-        
-    Returns:
-        Generated response text
-    """
+    """Generate response from model"""
     config = get_model_config(model_id)
     max_new_tokens = max_new_tokens or config["max_new_tokens"]
     
-    # Format conversation history
-    formatted_messages = format_messages(messages, model_id)
+    # Convert messages to dict format
+    messages_dict = [{"role": msg.role, "content": msg.content} for msg in messages]
     
-    # Prepare input
-    input_text = "\n".join([f"{m['role']}: {m['content']}" for m in formatted_messages])
-    input_ids = tokenizer.encode(input_text, return_tensors="pt").to(model.device)
+    # Format input text
+    input_text = format_chat_messages(messages_dict)
     
-    # Track performance
-    start_time = time.time()
-    input_tokens = input_ids.shape[1]
+    # Tokenize and generate
+    inputs = tokenizer(input_text, return_tensors="pt", padding=True)
+    inputs = {k: v.to(model.device) for k, v in inputs.items()}
     
-    try:
-        # Generate response
-        output_ids = model.generate(
-            input_ids,
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
             max_new_tokens=max_new_tokens,
+            do_sample=True,
             temperature=config["temperature"],
-            pad_token_id=tokenizer.eos_token_id
+            pad_token_id=tokenizer.pad_token_id,
+            bos_token_id=tokenizer.bos_token_id,
+            eos_token_id=tokenizer.eos_token_id
         )
-        
-        # Decode response
-        output_text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-        response = output_text[len(input_text):].strip()
-        
-        # Log performance metrics
-        output_tokens = output_ids.shape[1] - input_ids.shape[1]
-        metrics.log_inference_time(
-            model_id=model_id,
-            start_time=start_time,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens
-        )
-        
-        return response
-        
-    except Exception as e:
-        logger.error(
-            "Error generating response",
-            extra={
-                "error": str(e),
-                "model_id": model_id,
-                "input_tokens": input_tokens
-            },
-            exc_info=True
-        )
-        raise
+    
+    # Decode and clean up response
+    response = tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+    
+    # Remove any system or human prefixes from response
+    response = response.replace("### System:", "").replace("### Human:", "").replace("### Assistant:", "").strip()
+    
+    return response
 
 @app.get("/health")
-async def health_check() -> Dict[str, Any]:
-    """
-    Health check endpoint providing system status.
-    """
+def health_check() -> Dict[str, Any]:
+    """Health check endpoint providing system status"""
     try:
         resources = check_system_resources()
         return {
@@ -334,10 +295,8 @@ async def health_check() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/models")
-async def list_models() -> Dict[str, Any]:
-    """
-    List available models and their configurations.
-    """
+def list_models() -> Dict[str, Any]:
+    """List available models and their configurations"""
     return {
         "models": MODELS_CONFIG,
         "loaded_models": list(loaded_models.keys()),
@@ -349,9 +308,7 @@ async def chat(
     request: ChatRequest,
     background_tasks: BackgroundTasks
 ) -> Dict[str, str]:
-    """
-    Chat endpoint handling message generation.
-    """
+    """Chat endpoint handling message generation"""
     try:
         # Load model
         model, tokenizer = load_model(request.model_id, background_tasks)
@@ -365,9 +322,6 @@ async def chat(
             max_new_tokens=request.max_tokens
         )
         
-        # Log resource usage
-        metrics.log_resource_usage()
-        
         return {"response": response}
         
     except Exception as e:
@@ -379,14 +333,5 @@ async def chat(
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    logger.info(f"Starting server with available models: {', '.join(MODELS_CONFIG.keys())}")
-    logger.info(f"GPU Available: {torch.cuda.is_available()}")
-    if torch.cuda.is_available():
-        logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
-    
-    # Preload default model
-    try:
-        load_model(DEFAULT_MODEL, BackgroundTasks())
-        logger.info(f"Preloaded default model: {DEFAULT_MODEL}")
-    except Exception as e:
-        logger.error(f"Failed to preload default model: {str(e)}", exc_info=True)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
