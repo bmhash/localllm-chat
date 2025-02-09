@@ -120,6 +120,9 @@ source "$VENV_PATH/bin/activate"
 # Check for model files
 echo -e "\n${BLUE}Checking model files...${NC}"
 check_model_files "meta-llama/Llama-3.2-3B-Instruct"
+check_model_files "mistralai/Mistral-7B-Instruct-v0.3"
+check_model_files "deepseek-ai/deepseek-coder-7b-instruct-v1.5"
+check_model_files "codellama/CodeLlama-7b-Instruct-hf"
 
 # Start backend server
 echo -e "\n${BLUE}Starting backend server...${NC}"

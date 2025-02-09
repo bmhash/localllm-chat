@@ -52,7 +52,11 @@ MODELS_CONFIG: Dict[str, Dict[str, Any]] = {
         "load_in_4bit": True,
         "size_gb": 7,
         "checksum_url": "https://huggingface.co/deepseek-ai/deepseek-coder-7b-instruct-v1.5/raw/main/checksums.md5",
-        "trust_remote_code": False
+        "trust_remote_code": False,
+        "rope_scaling": {
+            "type": "dynamic",
+            "factor": 32.0
+        }
     },
     "codellama-7b": {
         "name": "CodeLlama 7B Instruct",
@@ -63,7 +67,11 @@ MODELS_CONFIG: Dict[str, Dict[str, Any]] = {
         "load_in_4bit": True,
         "size_gb": 7,
         "checksum_url": "https://huggingface.co/codellama/CodeLlama-7b-Instruct-hf/raw/main/checksums.md5",
-        "trust_remote_code": False
+        "trust_remote_code": False,
+        "rope_scaling": {
+            "type": "dynamic",
+            "factor": 32.0
+        }
     },
     "mistral-7b": {
         "name": "Mistral 7B Instruct v0.3",
@@ -74,7 +82,11 @@ MODELS_CONFIG: Dict[str, Dict[str, Any]] = {
         "load_in_4bit": True,
         "size_gb": 7,
         "checksum_url": "https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3/raw/main/checksums.md5",
-        "trust_remote_code": False
+        "trust_remote_code": False,
+        "rope_scaling": {
+            "type": "dynamic",
+            "factor": 32.0
+        }
     }
 }
 

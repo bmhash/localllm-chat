@@ -12,6 +12,7 @@ VENV_NAME=".venv"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 VENV_PATH="$SCRIPT_DIR/$VENV_NAME"
 PYTHON_MIN_VERSION="3.12"
+PYTHON_MAX_VERSION="3.12.99"  # Maximum supported Python version for torch+CUDA
 NODE_MIN_VERSION="14"
 CUDA_REQUIRED=true
 HF_TOKEN_FILE=".env"
@@ -92,6 +93,11 @@ fi
 PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
 if ! version_greater_equal "$PYTHON_VERSION" "$PYTHON_MIN_VERSION"; then
     echo -e "${RED}Error: Python $PYTHON_MIN_VERSION or higher is required (found $PYTHON_VERSION)${NC}"
+    exit 1
+fi
+if version_greater_equal "$PYTHON_VERSION" "$PYTHON_MAX_VERSION"; then
+    echo -e "${RED}Error: Python version too high. Maximum supported version is $PYTHON_MAX_VERSION (found $PYTHON_VERSION)${NC}"
+    echo -e "${YELLOW}This is due to torch+CUDA compatibility requirements${NC}"
     exit 1
 fi
 echo -e "${GREEN}✓ Python version $PYTHON_VERSION${NC}"
